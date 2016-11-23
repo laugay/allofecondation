@@ -1,0 +1,97 @@
+Cotyledon emergence LRT
+```{r Vcot_LRT, eval = FALSE}
+mod1 <- lmer(Vcotyledon ~ Block + Zone0 + (0 + Zone0|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+mod2 <- lmer(Vcotyledon ~ Zone0 + (0 + Zone0|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+anova(mod1, mod2)
+mod3 <- lmer(Vcotyledon ~ Block + (0 + Zone0|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+anova(mod1, mod3)
+mod4 <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+anova(mod1, mod4)
+mod5 <- lmer(Vcotyledon ~ Block + Zone0 + (0 + Zone0|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+anova(mod1, mod5)
+mod6 <- lmer(Vcotyledon ~ Block + Zone0 + (0 + Zone0|UniqueGeno) + (1|Plate) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+anova(mod1, mod6)
+mod7 <- lmer(Vcotyledon ~ Block + Zone0 + (0 + Zone0|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|IDBox) + (1|IDPod), data = data)
+anova(mod1, mod7)
+mod8 <- lmer(Vcotyledon ~ Block + Zone0 + (0 + Zone0|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDPod), data = data)
+anova(mod1, mod8)
+mod9 <- lmer(Vcotyledon ~ Block + Zone0 + (0 + Zone0|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDBox), data = data)
+anova(mod1, mod9)
+# No interactions between Zone0 and Genotype
+
+m <- mod4
+m1 <- lmer(Vcotyledon ~ Block + Zone0 + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+anova(m, m1)
+m2 <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+anova(m, m2)
+m3 <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plate) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+anova(m, m3)
+m4 <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|IDBox) + (1|IDPod), data = data)
+anova(m, m4)
+m5 <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDPod), data = data)
+anova(m, m5)
+m6 <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDBox), data = data)
+anova(m, m6)
+model.sel(m, m1, m2, m3, m4, m5, m6)
+# No Quadrat effect
+
+m <- m3
+m1 <- lmer(Vcotyledon ~ Block + Zone0 + (1|Plate) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+anova(m, m1)
+m2 <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+anova(m, m2)
+# No significative Plate effect
+m3 <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plate) + (1|IDBox) + (1|IDPod), data = data)
+anova(m, m3)
+m4 <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plate) + (1|Plant) + (1|IDPod), data = data)
+anova(m, m4)
+m5 <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plate) + (1|Plant) + (1|IDBox), data = data)
+anova(m, m5)
+model.sel(m, m1, m2, m3, m4, m5)
+
+summary(m2)
+
+m <- m2
+m1 <- lmer(Vcotyledon ~ Zone0 + (1|UniqueGeno) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+anova(m, m1)
+m2 <- lmer(Vcotyledon ~ Block + (1|UniqueGeno) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+anova(m, m2)
+m3 <- lmer(Vcotyledon ~ Block + Zone0 + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+anova(m, m3)
+m4 <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|IDBox) + (1|IDPod), data = data)
+anova(m, m4)
+m5 <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plant) + (1|IDPod), data = data)
+anova(m, m5)
+m6 <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plant) + (1|IDBox), data = data)
+anova(m, m6)
+```
+
+Number of seeds per pod LRT
+```{r, eval = FALSE}
+mod1 <- lmer(NbSeed ~ Plan + time_flo + (0 + Plan|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seed2)
+mod2 <- lmer(NbSeed ~ time_flo + (0 + Plan|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seed2)
+anova(mod1, mod2)
+mod3 <- lmer(NbSeed ~ Plan + (0 + Plan|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seed2)
+anova(mod1, mod3)
+mod4 <- lmer(NbSeed ~ Plan + time_flo + (1|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seed2)
+anova(mod1, mod4)
+mod5 <- lmer(NbSeed ~ Plan + time_flo + (0 + Plan|UniqueGeno) + (1|Plant), data = seed2)
+anova(mod1, mod5)
+mod6 <- lmer(NbSeed ~ Plan + time_flo + (0 + Plan|UniqueGeno) + (1|UniqueQuadrat), data = seed2)
+anova(mod1, mod6)
+model.sel(mod1, mod2, mod3, mod4, mod5, mod6)
+#+ No interactions between Plan and Genotype
+
+m <- mod4
+m1 <- lmer(NbSeed ~ time_flo + (1|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seed2)
+anova(m, m1)
+m2 <- lmer(NbSeed ~ Plan + (1|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seed2)
+anova(m, m2)
+m3 <- lmer(NbSeed ~ Plan + time_flo + (1|UniqueQuadrat) + (1|Plant), data = seed2)
+anova(m, m3)
+m4 <- lmer(NbSeed ~ Plan + time_flo + (1|UniqueGeno) + (1|Plant), data = seed2)
+anova(m, m4)
+m5 <- lmer(NbSeed ~ Plan + time_flo + (1|UniqueGeno) + (1|UniqueQuadrat), data = seed2)
+anova(m, m5)
+model.sel(m, m1, m2, m3, m4, m5)
+```

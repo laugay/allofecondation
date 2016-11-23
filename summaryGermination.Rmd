@@ -1,0 +1,76 @@
+---
+title: "CI seed viability"
+author: "Margaux Jullien"
+date: "6 octobre 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, echo=FALSE, warning=FALSE, message=FALSE)
+library(lme4)
+library(MASS)
+library(MuMIn)
+library(lattice)
+library(boot)
+```
+
+# Seed viability  
+```{r, eval = FALSE}
+setwd("~/DATA/Allofecondation")
+
+box <- read.table("GerminationAggrBox.csv", header = TRUE, sep = ";", dec = ".")
+#summary(box)
+
+box_intrapop <- subset(box, Plan == "Intrapop", select = c(propViabilityNA, Block, Zone, UniqueGeno, UniqueQuadrat, Plate, IDPod, Plant, IDBox, NbSeedminusNA, Dormancy))
+
+#logit <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+
+bestlogit <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+
+
+mySumm <- function(.) {
+   c(beta=fixef(.),sigma=as.data.frame(VarCorr(.))[,4])
+}
+
+bootstrap <- bootMer(bestlogit, mySumm, nsim = 100)
+CI_intercept <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 1)
+interceptInf <- as.data.frame(CI_intercept[4])[1,2] # logit scale
+interceptInfDataScale <- 1/(1+exp(-interceptInf)) # data scale
+interceptSup <- as.data.frame(CI_intercept[4])[1,3]
+interceptSupDataScale <- 1/(1+exp(-interceptSup))
+
+CI_box <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 2)
+boxInf <- 1/(1+exp(-(as.data.frame(CI_box[4])[1,2])))
+boxSup <- 1/(1+exp(-(as.data.frame(CI_box[4])[1,3])))
+varBox <- 1/(1+exp(-(as.data.frame(VarCorr(bestlogit))[1,4])))
+
+CI_pod <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 3)
+podInf <- 1/(1+exp(-(as.data.frame(CI_pod[4])[1,2])))
+podSup <- 1/(1+exp(-(as.data.frame(CI_pod[4])[1,3])))
+varPod <- 1/(1+exp(-(as.data.frame(VarCorr(bestlogit))[2,4])))
+
+CI_plant <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 4)
+plantInf <- 1/(1+exp(-(as.data.frame(CI_plant[4])[1,2])))
+plantSup <- 1/(1+exp(-(as.data.frame(CI_plant[4])[1,3])))
+varPlant <- 1/(1+exp(-(as.data.frame(VarCorr(bestlogit))[3,4])))
+
+variances <- c(varBox, varPod, varPlant)
+InfBound <- c(boxInf, podInf, plantInf)
+SupBound <- c(boxSup, podSup, plantSup)
+summ <- cbind(variances, InfBound, SupBound)
+
+summary(bestlogit)
+meanViability <- 1/(1+exp(-(as.numeric(fixef(bestlogit)[1]))))
+
+save(bestlogit, bootstrap, summ, meanViability, interceptInfDataScale, interceptSupDataScale, file = "summaryGermination.RData")
+
+```
+
+# Seed viability  
+```{r}
+load("summaryGermination.RData")
+
+summary(bestlogit)
+```
+
+Mean seed viability is `r meanViability` [`r interceptInfDataScale` - `r interceptSupDataScale`] 

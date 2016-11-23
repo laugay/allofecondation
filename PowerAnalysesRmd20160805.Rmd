@@ -1,0 +1,522 @@
+---
+title: "Colony Diameter 41 strains"
+author: "Nicolas O. Rode"
+date: "Aug, 5th 2016"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+    toc_float: true
+#  pdf_document:
+#    toc: yes
+---
+`````
+Power Analyses
+`````
+
+-------------------------------------------
+# Preparing the dataset
+## Import and check data
+```{r}
+library(asreml)
+library(MuMIn)
+library(Matrix)
+library(nadiv)
+library(MASS)
+library(plot3D)
+
+source("~/Rstudio/Rsrc/pin.R")
+
+list.files()
+setwd("~/Rstudio/IGE/20160628")
+data <- read.table("DataMGRAnalyses19May2016.csv",header=T,sep=';')
+
+head(data)
+data$Strain <- as.factor(data$Strain)
+data$Stack <- as.factor(data$Stack)
+data$Obs <- as.factor(1:nrow(data))
+data$Positionfac <- as.factor(data$Position)
+data$FallenBelAbv_1 <- data$FallenBel_1 + data$FallenAbv_1
+
+invdist2 <- 1/2
+invdist3 <- 1/3
+
+data$invdistbestmodel <- rep(1/sqrt(2),nrow(data))
+data$intfac <- rep(sqrt(18/49),nrow(data))
+data$invdist2 <- rep(invdist2,nrow(data))
+data$invdist3 <- rep(invdist3,nrow(data))
+data$Strain_Stack <- as.factor(paste(data$Strain,data$Stack,sep="_"))
+data <- data[data$Replicate==1,]
+
+nrow(data) ## 336
+## Sort the dataset
+data <- data[order(data$Stack,data$Position),]
+```
+
+## levels for G x G IGE
+```{r}
+## Setting the same levels for first or second or third order interactions for Strain_Strain (used for Supp Table S4)
+facallabv1bel1 <- unique(c(as.character(data$Strain_StrainBel_1), as.character(data$Strain_StrainAbv_1)))
+facallabv2bel2 <- unique(c(as.character(data$Strain_StrainBel_2), as.character(data$Strain_StrainAbv_2)))
+facallabv3bel3 <- unique(c(as.character(data$Strain_StrainBel_3), as.character(data$Strain_StrainAbv_3)))
+
+data$Strain_StrainBel_1MM1 <- factor(data$Strain_StrainBel_1,levels= facallabv1bel1)
+data$Strain_StrainAbv_1MM1 <- factor(data$Strain_StrainAbv_1,levels= facallabv1bel1)
+data$Strain_StrainBel_2MM2 <- factor(data$Strain_StrainBel_2,levels= facallabv2bel2)
+data$Strain_StrainAbv_2MM2 <- factor(data$Strain_StrainAbv_2,levels= facallabv2bel2)
+data$Strain_StrainBel_3MM3 <- factor(data$Strain_StrainBel_3,levels= facallabv3bel3)
+data$Strain_StrainAbv_3MM3 <- factor(data$Strain_StrainAbv_3,levels= facallabv3bel3)
+
+
+## Setting the same levels for first, second and third order interactions for G x G IGE (used for Supp Table S4)
+facallabv1bel1 <- unique(c(facallabv1bel1, facallabv2bel2, facallabv3bel3))
+length(facallabv1bel1)
+
+facallabv2bel2 <- facallabv1bel1
+facallabv3bel3 <- facallabv1bel1
+
+data$Strain_StrainBel_1MM <- factor(data$Strain_StrainBel_1,levels= facallabv1bel1)
+data$Strain_StrainAbv_1MM <- factor(data$Strain_StrainAbv_1,levels= facallabv1bel1)
+
+data$Strain_StrainBel_2MM <- factor(data$Strain_StrainBel_2,levels= facallabv2bel2)
+data$Strain_StrainAbv_2MM <- factor(data$Strain_StrainAbv_2,levels= facallabv2bel2)
+
+data$Strain_StrainBel_3MM <- factor(data$Strain_StrainBel_3,levels= facallabv3bel3)
+data$Strain_StrainAbv_3MM <- factor(data$Strain_StrainAbv_3,levels= facallabv3bel3)
+
+```
+
+## Estimates with Dataset3
+```{r}
+## Filter data
+data <- data[!is.na(data$ColonyDiameter)&data$Position>3&data$Position<19,]
+nrow(data)
+
+## Best model
+m0 <- asreml(MeanColDiam ~ Fallen,rcov=~Stack:ar1(Positionfac),random=~ Strain+ invdistbestmodel:Strain_StrainBel_1MM +and(invdistbestmodel:Strain_StrainAbv_1MM)+Obs,data=data,trace=F)
+
+## The best model for the relative importance of additive and non)additive IGEs is called "mbest"
+mbest <- m0
+
+VarRemaining <- summary(mbest)$varcomp[1,2]+summary(mbest)$varcomp[2,2]+summary(mbest)$varcomp[3,2]+summary(mbest)$varcomp[4,2]
+```
+
+# Power analysis of GxG IGEs
+## Function and parameters used for the simulations
+```{r}
+### Function for simulation of an AR1 model
+  ## function for simulating from an AR1 process modified from J. Haddfield:https://stat.ethz.ch/pipermail/r-sig-mixed-models/2012q4/019612.html
+  ## to initiate the process in the infinite past
+rAR1 <- function(n,rho, sigma){
+  L <- Diagonal(n)-bandSparse(n,n,-1,list(rep(rho,n-1)))
+  y <- rnorm(n, 0, sqrt(1-rho^2))
+  L[1,1] <- sqrt(1-rho^2)
+  solve(L,y)@x*sigma
+ }
+
+numStrain <- length(levels(data$Strain))
+numStrain_StrainBelAbv <- length(facallabv1bel1)
+numStack <- length(levels(data$Stack))
+numpos <- length(unique(data$Position))
+
+## Number of observations
+numobs<-nrow(data[!is.na(data$StrainAbv_1)&!is.na(data$StrainBel_1)&!is.na(data$StrainAbv_2)&!is.na(data$StrainBel_2)&!is.na(data$StrainAbv_3)&!is.na(data$StrainBel_3),])
+nrow(data)
+
+```
+## Simulations for interaction factor with plates two and three plates away
+```{r}
+
+simIntFac <- function(sigStrainBelAbv1=0,rhoStrain_NeighStrainBelAbv1=0,sigStrain=sqrt(summary(mbest)$varcomp[2,2]),sigStrain_StrainBelAbv=sqrt(summary(mbest)$varcomp[1,2]), sigres = sqrt(summary(mbest)$varcomp[3,2]),sigautocor=sqrt(summary(mbest)$varcomp[4,2]),rho=summary(mbest)$varcomp[5,2],nsim=1){
+
+  fit<-list(aiccm0=list(),aiccm1=list(),simaicc=list(),checkCV=list())
+  
+     for (sim in (1:nsim)){
+       #sim=20
+      ## 1/ Simulation of the AR1 model ####
+        print(sim)
+        set.seed(sim) ## set seed for random number generator to give repeatable results
+
+        ## Sampling of a random intercept for each Strain
+        ## Sample in a multivariate normal distrobution
+
+        Sigma <- matrix(c(sigStrain^2, rhoStrain_NeighStrainBelAbv1*sigStrain*sigStrainBelAbv1, rhoStrain_NeighStrainBelAbv1*sigStrain* sigStrainBelAbv1, sigStrainBelAbv1^2),2,2)
+        ## Group level random intercept for the focal strain and its effect as a neighbour
+        BV <- mvrnorm(n=numStrain,mu=rep(0,2),Sigma)
+
+        Fi <- BV[,1]
+        names(Fi) <- levels(data$Strain)
+
+        Nj <- BV[,2]
+        names(Nj) <- levels(data$Strain)
+
+        ## Sampling of a random intercept for each Strain x StrainBel1 and Strain x StrainAbv1 G x G IGE
+        Iij <- rnorm(n= numStrain_StrainBelAbv, 0, sigStrain_StrainBelAbv)
+        names(Iij) <- levels(data$Strain_StrainBel_1MM)
+
+        ## Creating a matrix with observations as rows and strain identity as columns (240 observations x 41 strains)
+        L1 <- model.matrix(~-1+Strain,data)
+        dim(L1)
+        data$U_j1 <- L1 %*% Fi # strain genotypic value
+        
+        ## Creating a matrix with observations as rows and Strain x StrainBel1 / Strain x StrainAbv1 identity as columns ( 240 observations x 1173 strain combinations)
+        L2 <- model.matrix(~-1+ Strain_StrainBel_1MM,data)
+        L3 <- model.matrix(~-1+ Strain_StrainAbv_1MM,data)
+        L23 <- L2+L3
+        dim(L23)
+        data$U_j2 <- L23 %*% Iij # G X G IGE values
+      
+        ## Creating a matrix with observations as rows and Strain x StrainBel2 / Strain x StrainAbv2 identity as columns ( 336 observations x 1173 strain combinations)
+        L4 <- model.matrix(~-1+ Strain_StrainBel_2MM,data)
+        L5 <- model.matrix(~-1+ Strain_StrainAbv_2MM,data)
+        L45 <- L4+L5
+        dim(L45)
+        data$U_j3 <- invdist2*L45 %*% Iij  # G X G IGE values 2 plates away from focal
+
+        ## Creating a matrix with observations as rows and Strain x StrainBel3 / Strain x StrainAbv3 identity as columns ( 240 observations x 1173 strain combinations)
+        L6 <- model.matrix(~-1+ Strain_StrainBel_3MM,data)
+        L7 <- model.matrix(~-1+ Strain_StrainAbv_3MM,data)
+        L67 <- L6+L7
+        dim(L67)
+        data$U_j4 <- invdist3*L67 %*% Iij # G X G IGE values 3 plates away from focal
+
+        ## Creating a matrix with observations as rows and Strain x StrainBel1 / Strain x StrainAbv1 identity as columns ( 240 observations x 1173 strain combinations)
+        L8 <- model.matrix(~-1+ StrainBel_1,data)
+        L9 <- model.matrix(~-1+ StrainAbv_1,data)
+        L89 <- L8+L9
+        dim(L89)
+        data$U_j5 <- L89 %*% Nj # main IGE values
+  
+        ## Micro-environmental effect with spatial auto-correlation effect
+        data$U_j6 <- rep(NA,nrow(data))
+        ## Loop over each stack to compute the residuals with AR1 correlations
+        for (i in (1:numStack)){
+          data$U_j6[data$Stack==i] <- rAR1(numpos,rho=rho,sigma=sigautocor)
+        } ## End of for loop for U_j6
+
+        ## Non-spatially autocorrelated variation
+        err <- rnorm(n= nrow(data), 0, sigres)
+        ## Additing all the coefficients of the model
+        data$y <- mbest$coefficient$fixed[2]+data$Fallen*mbest$coefficient$fixed[1]+data$U_j1+data$U_j2+data$U_j3+data$U_j4+data$U_j5+data$U_j6+err
+        
+        
+        ## Best model found during model selection (with G x G IGEs with strains one plate away from the focal)
+        m0 <- asreml(y ~ Fallen,rcov=~Stack:ar1(Positionfac),random=~ Strain+Strain_StrainBel_1MM +and(Strain_StrainAbv_1MM)+Obs,data=data,trace=F)
+        if(m0$last.message=="LogLikelihood not converged")
+        m0 <- update(m0)
+      
+        ## Fit model with interaction with genotypes more than one plate away
+        m1 <- asreml(y ~ Fallen,rcov=~Stack:ar1(Positionfac),random=~ Strain+ intfac:Strain_StrainBel_1MM+and(intfac:Strain_StrainAbv_1MM)+ and(intfac:invdist2:Strain_StrainBel_2MM)+ and(intfac:invdist2:Strain_StrainAbv_2MM)+ and(intfac:invdist3:Strain_StrainBel_3MM)+ and(intfac:invdist3:Strain_StrainAbv_3MM)+Obs,data=data,trace=F)
+        ## The interaction factor allows the estimated variance (summary(m1)$varcom) to correspond directy to the G x G IGE variance (the interaction factor is found by solving 2f^2+f^2/2+2f^2/9==1)
+            
+       if(m1$last.message=="LogLikelihood not converged")
+       m1 <- update(m1)
+
+       fit$checkCV[[sim]]  <- ifelse(m1$last.message=="LogLikelihood not converged",1,0)
+       aicc <- aic(c(m0$loglik,m1$loglik),fp=c(nrow(summary(m0)$varcomp)+length(m0$coefficients$fixed),nrow(summary(m1)$varcomp)+length(m1$coefficients$fixed)),n=nrow(data))$AICc
+       fit$aiccm0[[sim]] <- aicc[1]
+       fit$aiccm1[[sim]] <- aicc[2]
+       ## AICc wrong model - AICc true model
+       fit$simaicc[[sim]] <- aicc[1]-aicc[2]
+     }
+  return(fit)
+  }
+        
+fit <- simIntFac(nsim=1000)
+
+mean(unlist(fit$checkCV))
+
+## Distribution  of AICc differences between m1 et m0
+pdf(file="FigS3_AICc distribution G x G IGE with plates two and three plates away.pdf")
+
+hist(unlist(fit$simaicc)[unlist(fit$simaicc)>-100],main="AICc Distribution",xlab="AICc(reduced model) - AICc(orignal model)",las=1,ylab="Percent of total")
+
+dev.off()
+
+## Proportion of models where m1 is among the best models
+mean(unlist(fit$simaicc)>-2)
+
+## Proportion of models where m1 is the unique best model
+mean(unlist(fit$simaicc)>2)
+
+data.frame(unlist(fit$aiccm0),unlist(fit$aiccm1))
+
+```
+
+## Simulations for power to detect main IGEs
+```{r}
+simMainIGE <- function(sigStrainBelAbv1=0,
+                       rhoStrain_NeighStrainBelAbv1=0,
+                       sigStrain=sqrt(summary(mbest)$varcomp[2,2]),
+                       sigStrain_StrainBelAbv=sqrt(summary(mbest)$varcomp[1,2]),
+                       sigres = sqrt(summary(mbest)$varcomp[3,2]),
+                       sigautocor=sqrt(summary(mbest)$varcomp[4,2]),
+                       rho=summary(mbest)$varcomp[5,2],nsim=1){
+
+  fit<-list(aiccm0=list(),aiccm1=list(),simaicc=list(),checkCV=list())
+  
+     for (sim in (1:nsim)){
+       #sim=20
+      ## 1/ Simulation of the AR1 model ####
+        print(sim)
+        set.seed(sim) ## set seed for random number generator to give repeatable results
+
+        ## Sampling of a random intercept for each Strain
+        ## Sample in a multivariate normal distrobution
+
+        Sigma <- matrix(c(sigStrain^2, rhoStrain_NeighStrainBelAbv1*sigStrain*sigStrainBelAbv1, rhoStrain_NeighStrainBelAbv1*sigStrain* sigStrainBelAbv1, sigStrainBelAbv1^2),2,2)
+        ## Group level random intercept for the focal strain and its effect as a neighbour
+        BV <- mvrnorm(n=numStrain,mu=rep(0,2),Sigma)
+
+        Fi <- BV[,1]
+        names(Fi) <- levels(data$Strain)
+
+        Nj <- BV[,2]
+        names(Nj) <- levels(data$Strain)
+
+        ## Sampling of a random intercept for each Strain x StrainBel1 and Strain x StrainAbv1 G x G IGE
+        Iij <- rnorm(n= numStrain_StrainBelAbv, 0, sigStrain_StrainBelAbv)
+        names(Iij) <- levels(data$Strain_StrainBel_1MM)
+
+        ## Creating a matrix with observations as rows and strain identity as columns (240 observations x 41 strains)
+        L1 <- model.matrix(~-1+Strain,data)
+        dim(L1)
+        data$U_j1 <- L1 %*% Fi # strain genotypic value
+        
+        ## Creating a matrix with observations as rows and Strain x StrainBel1 / Strain x StrainAbv1 identity as columns ( 240 observations x 1173 strain combinations)
+        L2 <- model.matrix(~-1+ Strain_StrainBel_1MM,data)
+        L3 <- model.matrix(~-1+ Strain_StrainAbv_1MM,data)
+        L23 <- L2+L3
+        dim(L23)
+        data$U_j2 <- L23 %*% Iij # G X G IGE values
+      
+        ## Creating a matrix with observations as rows and Strain x StrainBel2 / Strain x StrainAbv2 identity as columns ( 336 observations x 1173 strain combinations)
+        L4 <- model.matrix(~-1+ Strain_StrainBel_2MM,data)
+        L5 <- model.matrix(~-1+ Strain_StrainAbv_2MM,data)
+        L45 <- L4+L5
+        dim(L45)
+        data$U_j3 <- invdist2*L45 %*% Iij  # G X G IGE values 2 plates away from focal
+
+        ## Creating a matrix with observations as rows and Strain x StrainBel3 / Strain x StrainAbv3 identity as columns ( 240 observations x 1173 strain combinations)
+        L6 <- model.matrix(~-1+ Strain_StrainBel_3MM,data)
+        L7 <- model.matrix(~-1+ Strain_StrainAbv_3MM,data)
+        L67 <- L6+L7
+        dim(L67)
+        data$U_j4 <- invdist3*L67 %*% Iij # G X G IGE values 3 plates away from focal
+
+        ## Creating a matrix with observations as rows and Strain x StrainBel1 / Strain x StrainAbv1 identity as columns ( 240 observations x 1173 strain combinations)
+        L8 <- model.matrix(~-1+ StrainBel_1,data)
+        L9 <- model.matrix(~-1+ StrainAbv_1,data)
+        L89 <- L8+L9
+        dim(L89)
+        data$U_j5 <- L89 %*% Nj # main IGE values
+  
+        ## Micro-environmental effect with spatial auto-correlation effect
+        data$U_j6 <- rep(NA,nrow(data))
+        ## Loop over each stack to compute the residuals with AR1 correlations
+        for (i in (1:numStack)){
+          data$U_j6[data$Stack==i] <- rAR1(numpos,rho=rho,sigma=sigautocor)
+        } ## End of for loop for U_j6
+
+        ## Non-spatially autocorrelated variation
+        err <- rnorm(n= nrow(data), 0, sigres)
+        ## Additing all the coefficients of the model
+        data$y <- mbest$coefficient$fixed[2]+data$Fallen*mbest$coefficient$fixed[1]+data$U_j1+data$U_j2+data$U_j3+data$U_j4+data$U_j5+data$U_j6+err
+        
+        
+        ## Best model found during model selection (with G x G IGEs with strains one plate away from the focal)
+        m0 <- asreml(y ~ Fallen,rcov=~Stack:ar1(Positionfac),random=~ Strain+Strain_StrainBel_1MM +and(Strain_StrainAbv_1MM)+Obs,data=data,trace=F)
+        if(m0$last.message=="LogLikelihood not converged")
+        m0 <- update(m0)
+      
+        ## Fit model with main IGE
+        m1 <- asreml(y ~ Fallen,rcov=~Stack:ar1(Positionfac),random=~ Strain+ Strain_StrainBel_1MM+and(Strain_StrainAbv_1MM)+StrainBel_1+StrainAbv_1+Obs,data=data,trace=F)
+        ## The interaction factor allows the estimated variance (summary(m1)$varcom) to correspond directy to the G x G IGE variance (the interaction factor is found by solving 2f^2+f^2/2+2f^2/9==1)
+            
+       if(m1$last.message=="LogLikelihood not converged")
+       m1 <- update(m1)
+
+       fit$checkCV[[sim]]  <- ifelse(m1$last.message=="LogLikelihood not converged",1,0)
+       aicc <- aic(c(m0$loglik,m1$loglik),fp=c(nrow(summary(m0)$varcomp)+length(m0$coefficients$fixed),nrow(summary(m1)$varcomp)+length(m1$coefficients$fixed)),n=nrow(data))$AICc
+       fit$aiccm0[[sim]] <- aicc[1]
+       fit$aiccm1[[sim]] <- aicc[2]
+       ## AICc wrong model - AICc true model
+       fit$simaicc[[sim]] <- aicc[1]-aicc[2]
+     }
+  return(fit)
+  }
+        
+SigBelAbv1 <- c(0.001,0.01,0.02,0.025,0.03,0.035,0.04,0.045,0.05,0.055,0.06,0.065,0.075,0.085,0.1,0.125,0.15,0.2)
+#SigBelAbv1 <- c(0.001,0.1,0.2)
+
+## Run simulations
+fit <- sapply(SigBelAbv1,simMainIGE,nsim=1000)
+save(fit,file="SimulFigS4.R")
+
+## Check convergence of m1
+sapply(1:length(SigBelAbv1),function(x){mean(unlist(fit[,x]$checkCV))})
+
+## Proportion of models where m1 is in the best models
+propbest <- sapply(1:length(SigBelAbv1),function(x){mean(unlist(fit[,x]$simaicc)>-2)})
+propbest
+
+## Proportion of models where m1 is the unique best model
+sapply(1:length(SigBelAbv1),function(x){mean(unlist(fit[,x]$simaicc)>2)})
+
+daic <- sapply(1:length(SigBelAbv1),function(x){unlist(fit[,x]$simaicc)})
+
+## Proportion of phenotypic variance explained by neighbour genotypes above and below the focal
+PropVarNeighbStrain <- 100*(2*SigBelAbv1^2)/((2*SigBelAbv1^2) + VarRemaining)
+
+
+pdf(file="FigS4 Power Main IGEs.pdf")
+
+plot(propbest~ PropVarNeighbStrain ,type='l',xlab="Percentage of variation explained by main IGEs",ylab="Power",col='black',las=1,bty="n",xlim=c(0,20),ylim=c(0,1))
+abline(h=0.8,lty=2,col="grey")
+
+dev.off()
+
+```
+
+## Simulations for correlation between DGEs and main IGEs
+```{r}
+
+simCorrDGEMainIGE <- function(sigStrainBelAbv1=0,
+                              rhoStrain_NeighStrainBelAbv1=0,
+                              sigStrain=sqrt(summary(mbest)$varcomp[2,2]),
+                              sigStrain_StrainBelAbv=sqrt(summary(mbest)$varcomp[1,2]),
+                              sigres = sqrt(summary(mbest)$varcomp[3,2]),
+                              sigautocor=sqrt(summary(mbest)$varcomp[4,2]),
+                              rho=summary(mbest)$varcomp[5,2],
+                              nsim=3){
+
+  fit<-list(aiccm0=list(),aiccm1=list(),simaicc=list(),checkCV=list())
+  
+     for (sim in (1:nsim)){
+       #sim=20
+      ## 1/ Simulation of the AR1 model ####
+        print(sim)
+        set.seed(sim) ## set seed for random number generator to give repeatable results
+
+        ## Sampling of a random intercept for each Strain
+        ## Sample in a multivariate normal distrobution
+
+        Sigma <- matrix(c(sigStrain^2, rhoStrain_NeighStrainBelAbv1*sigStrain*sigStrainBelAbv1, rhoStrain_NeighStrainBelAbv1*sigStrain* sigStrainBelAbv1, sigStrainBelAbv1^2),2,2)
+        ## Group level random intercept for the focal strain and its effect as a neighbour
+        BV <- mvrnorm(n=numStrain,mu=rep(0,2),Sigma)
+
+        Fi <- BV[,1]
+        names(Fi) <- levels(data$Strain)
+
+        Nj <- BV[,2]
+        names(Nj) <- levels(data$Strain)
+
+        ## Sampling of a random intercept for each Strain x StrainBel1 and Strain x StrainAbv1 G x G IGE
+        Iij <- rnorm(n= numStrain_StrainBelAbv, 0, sigStrain_StrainBelAbv)
+        names(Iij) <- levels(data$Strain_StrainBel_1MM)
+
+        ## Creating a matrix with observations as rows and strain identity as columns (240 observations x 41 strains)
+        L1 <- model.matrix(~-1+Strain,data)
+        dim(L1)
+        data$U_j1 <- L1 %*% Fi # strain genotypic value
+        
+        ## Creating a matrix with observations as rows and Strain x StrainBel1 / Strain x StrainAbv1 identity as columns ( 240 observations x 1173 strain combinations)
+        L2 <- model.matrix(~-1+ Strain_StrainBel_1MM,data)
+        L3 <- model.matrix(~-1+ Strain_StrainAbv_1MM,data)
+        L23 <- L2+L3
+        dim(L23)
+        data$U_j2 <- L23 %*% Iij # G X G IGE values
+      
+        ## Creating a matrix with observations as rows and Strain x StrainBel2 / Strain x StrainAbv2 identity as columns ( 336 observations x 1173 strain combinations)
+        L4 <- model.matrix(~-1+ Strain_StrainBel_2MM,data)
+        L5 <- model.matrix(~-1+ Strain_StrainAbv_2MM,data)
+        L45 <- L4+L5
+        dim(L45)
+        data$U_j3 <- invdist2*L45 %*% Iij  # G X G IGE values 2 plates away from focal
+
+        ## Creating a matrix with observations as rows and Strain x StrainBel3 / Strain x StrainAbv3 identity as columns ( 240 observations x 1173 strain combinations)
+        L6 <- model.matrix(~-1+ Strain_StrainBel_3MM,data)
+        L7 <- model.matrix(~-1+ Strain_StrainAbv_3MM,data)
+        L67 <- L6+L7
+        dim(L67)
+        data$U_j4 <- invdist3*L67 %*% Iij # G X G IGE values 3 plates away from focal
+
+        ## Creating a matrix with observations as rows and Strain x StrainBel1 / Strain x StrainAbv1 identity as columns ( 240 observations x 1173 strain combinations)
+        L8 <- model.matrix(~-1+ StrainBel_1,data)
+        L9 <- model.matrix(~-1+ StrainAbv_1,data)
+        L89 <- L8+L9
+        dim(L89)
+        data$U_j5 <- L89 %*% Nj # main IGE values
+  
+        ## Micro-environmental effect with spatial auto-correlation effect
+        data$U_j6 <- rep(NA,nrow(data))
+        ## Loop over each stack to compute the residuals with AR1 correlations
+        for (i in (1:numStack)){
+          data$U_j6[data$Stack==i] <- rAR1(numpos,rho=rho,sigma=sigautocor)
+        } ## End of for loop for U_j6
+
+        ## Non-spatially autocorrelated variation
+        err <- rnorm(n= nrow(data), 0, sigres)
+        ## Additing all the coefficients of the model
+        data$y <- mbest$coefficient$fixed[2]+data$Fallen*mbest$coefficient$fixed[1]+data$U_j1+data$U_j2+data$U_j3+data$U_j4+data$U_j5+data$U_j6+err
+        
+        ## Best model found during model selection (with G x G IGEs with strains one plate away from the focal)
+        m0 <- asreml(y ~ Fallen,rcov=~Stack:ar1(Positionfac),random=~ Strain+Strain_StrainBel_1MM +and(Strain_StrainAbv_1MM)+Obs,data=data,trace=F)
+        if(m0$last.message=="LogLikelihood not converged")
+        m0 <- update(m0)
+      
+        ## Fit model with main IGEs and correlation with DGEs
+        m1 <- asreml(y ~ Fallen,rcov=~Stack:ar1(Positionfac),random=~ Strain_StrainBel_1MM +and(Strain_StrainAbv_1MM)+str(~Strain+ StrainBel_1+and(StrainAbv_1),~corh(2):id(41))+Obs,data=data,trace=F)     
+       if(m1$last.message=="LogLikelihood not converged")
+       m1 <- update(m1)
+
+       fit$checkCV[[sim]]  <- ifelse(m1$last.message=="LogLikelihood not converged",1,0)
+       aicc <- aic(c(m0$loglik,m1$loglik),fp=c(nrow(summary(m0)$varcomp)+length(m0$coefficients$fixed),nrow(summary(m1)$varcomp)+length(m1$coefficients$fixed)),n=nrow(data))$AICc
+       fit$aiccm0[[sim]] <- aicc[1]
+       fit$aiccm1[[sim]] <- aicc[2]
+       ## AICc wrong model - AICc true model
+       fit$simaicc[[sim]] <- aicc[1]-aicc[2]
+     }
+  return(fit)
+}
+
+rhoStrain_Neigh <- c(0.0001,0.005,0.01,0.05,0.1,0.5,0.75,0.9)
+SigBelAbv1 <- c(0.01,0.025,0.05,0.06,0.07,0.075,0.08,0.09,0.1,0.125)
+
+#rhoStrain_Neigh <- c(0.0001,0.01,0.5,0.9)
+#SigBelAbv1 <- c(0.001,0.01,0.05,0.2)
+
+## Proportion of phenotypic variance explained by neighbour genotypes above and below the focal
+PropVarNeighbStrain <- 100*(2*SigBelAbv1^2)/((2*SigBelAbv1^2) + VarRemaining)
+
+fit <- list()
+sim <- list()
+for (index in 1:length(rhoStrain_Neigh)){
+  print(paste("rho =",rhoStrain_Neigh[index]))
+  ## Run simulations
+  fit[[index]] <- sapply(SigBelAbv1,simCorrDGEMainIGE,rhoStrain_NeighStrainBelAbv1=rhoStrain_Neigh[index],nsim=10)
+  ## Proportion of models where m1 is in the best models
+  sim[[index]] <- sapply(1:length(SigBelAbv1),function(x){mean(unlist(fit[[index]][,x]$simaicc)>-2)})
+}
+fit
+save(fit,file="SimulFigS5.R")
+
+sim
+
+## Matrix with power as a function of the proportion of variance explained by main IGEs and the correlation between DGEs and main IGEs
+mat <- as.matrix(as.data.frame(sim))
+rownames(mat) <- PropVarNeighbStrain 
+colnames(mat) <- rhoStrain_Neigh
+mat
+
+pdf(file="FigS5_Power Analysis correlation DGEs and main IGEs Nj rhoij n=100 new.pdf")
+## https://cran.r-project.org/web/packages/plot3D/vignettes/volcano.pdf
+
+contour2D(mat,x= PropVarNeighbStrain,y= rhoStrain_Neigh,lwd=2,xlab="Percentage of variance explained by main IGEs (Njp±1)",ylab="Correlation between DGEs and main IGEs (Fip and Njp±1)",main="Power to detect both effects",las=1)
+
+#image2D(mat1,x= PropVarNeighbStrain,y= rhoStrain_Neigh,lwd=2,lighting=T,rasterImage=F,contour=list(col="white",labcex=0.8,lwd=3,alpha=0.5))
+
+dev.off()
+```
+

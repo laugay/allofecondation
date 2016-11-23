@@ -1,0 +1,1955 @@
+---
+title: "Quantitative genetic analysis of germination in the residual allogamy dataset"
+author: "Margaux Jullien"
+date: "19 juillet 2016"
+output: pdf_document
+geometry: margin = 1.5 cm
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='Figs_germination/', echo=FALSE, warning=FALSE, message=FALSE)
+library(lme4)
+library(MASS)
+library(MuMIn)
+library(lattice)
+library(boot)
+library(sjPlot)
+library(sjmisc)
+library(ggplot2)
+library(gridExtra)
+library(knitr)
+```
+
+What are the underlying traits influencing residual allofecondation in *Medicago truncatula*?  
+
+  - Flowering date of the mother plant  
+  - Flowering date of the "father" plant  
+  - Environmental conditions: zone, quadrat (plant density per quadrat = covariable?), plan (intra/interpop)  
+  - Seed numbers, pod numbers, number of viable seeds  
+  
+Supplementary questions: does flowering date affect the probability of being a father?  
+
+Analysis of life history traits during seed germination: are there genetic effects, effects of the mother plant's flowering date? Does allofecondation have an effect on life history traits during seed germination?  
+
+  - Seed swelling before scarification (seed dormancy)  
+  - Speed of radicle emergence  
+  - Speed of cotyledon emergence (deployed cotyledons)  
+  - Seed viability  
+  - Having developped a radicle  
+  - having developped cotyledons  
+
+
+
+```{r import_data, include = FALSE, eval = FALSE}
+setwd("~/DATA/Allofecondation")
+
+# Import data
+data <- read.table("germination.csv", header = TRUE, sep = ";", dec = ".")
+# Set as dates
+data$SwellingDate <- as.Date(data$SwellingDate, format = "%d-%b")
+data$RadicleDate <- as.Date(data$RadicleDate, format = "%d-%b")
+data$CotyledonDate <- as.Date(data$CotyledonDate, format = "%d-%b")
+data$SampleDate <- as.Date(data$SampleDate, format = "%d-%b")
+
+data$Block <- as.factor(data$Block)
+data$Zone <- as.factor(data$Zone)
+data$Plate <- as.factor(data$Plate)
+
+summary(data)
+
+# Speed 
+baseRun1 <- as.Date(c("2016-05-17"), format = "%Y-%m-%d")
+baseRun2 <- as.Date(c("2016-06-06"), format = "%Y-%m-%d")
+baseRun3 <- as.Date(c("2016-06-27"), format = "%Y-%m-%d")
+
+# Swelling speed
+data[,28] <- NA
+colnames(data)[28] <- "Vgonflement"
+for (i in 1:nrow(data)){
+  if (data[i,10] == 1){data[i,28] <- data[i,15] - baseRun1}
+  else
+    if (data[i,10] == 2){data[i,28] <- data[i,15] - baseRun2}
+  else
+    if (data[i,10] == 3){data[i,28] <- data[i,15] - baseRun3}
+}
+
+
+# Radicle speed
+data[,29] <- NA
+colnames(data)[29] <- "Vradicule"
+for (i in 1:nrow(data)){data[i,29] <- data[i, 17] - data[i, 15]}
+
+# Cotyledon speed
+data[,30] <- NA
+colnames(data)[30] <- "Vcotyledon"
+for (i in 1:nrow(data)){data[i, 30] <- data[i, 19] - data[i, 15]}
+
+write.csv(data, file = "germinationR.csv", quote = FALSE, row.names = FALSE)
+
+summary(data)
+```
+
+```{r get_data}
+setwd("~/DATA/Allofecondation")
+
+data <- read.csv("germinationR.csv", header = TRUE, sep = ";", dec = ".")
+
+data$Zone <- as.factor(data$Zone)
+data$Zone0 <- as.factor(data$Zone0)
+data$Block <- as.factor(data$Block)
+data$Plate <- as.factor(data$Plate)
+data$IDPod <- as.factor(data$IDPod)
+data$IDSeed <- as.factor(data$IDSeed)
+
+#summary(data)
+
+# Subset removing interpop to see if there is a Zone effect within intrapop
+data_intrapop <- subset(data, Plan == "Intrapop", select = c(Vgonflement, Vradicule, Vcotyledon, Block, Zone, Plan, UniqueGeno, Plate, UniqueQuadrat, Plant, IDPod, IDBox))
+data_intrapop$Zone <- as.factor(data_intrapop$Zone)
+```
+
+
+```{r gonflement, eval=FALSE}
+# Seed swelling  
+par(mfrow=c(2,2))
+boxplot(Vgonflement ~ Block, data = data, main = "Vgonflement ~ Block")
+boxplot(Vgonflement ~ Plate, data = data, main = "Vgonflement ~ Plate")
+boxplot(Vgonflement ~ UniqueGeno, data = data, main = "Vgonflement ~ UniqueGeno", las = 2)
+boxplot(Vgonflement ~ Zone, data = data, main = "Vgonflement ~ Zone")
+
+
+relgrad <- with(mod1@optinfo$derivs,solve(Hessian,gradient))
+max(abs(relgrad))
+diag.vals <- getME(mod1,"theta")[getME(mod1,"lower") == 0]
+any(diag.vals < 1e-6) # FALSE
+
+devfun <- update(mod1, devFunOnly=TRUE)
+if (isLMM(mod1)) {
+    pars <- getME(mod1,"theta")
+} else {
+    ## GLMM: requires both random and fixed parameters
+    pars <- getME(mod1, c("theta","fixef"))
+}
+if (require("numDeriv")) {
+    cat("hess:\n"); print(hess <- hessian(devfun, unlist(pars)))
+    cat("grad:\n"); print(grad <- grad(devfun, unlist(pars)))
+    cat("scaled gradient:\n")
+    print(scgrad <- solve(chol(hess), grad))
+}
+## compare with internal calculations:
+mod1@optinfo$derivs
+```
+
+
+
+
+# Radicle emergence  
+
+The speed of radicle emergence is computed as the difference between the first observation of a radicle and the swelling date of the seed.  
+
+Effects looked into:  
+
+  - Genetic: genotype of the mother plant (within each plan, intrapop and interpop)  
+  - Environment: Plan (intra/interpop), Zone (within intrapop), Quadrat, Pod, mother plant (= maternal environment)  
+  - Experiment: block, plate, box  
+
+
+## Boxplots  
+```{r radicule}
+# Boxplot radicule
+par(mfrow=c(3,2))
+boxplot(Vradicule ~ Block, data = data, main = "Vradicule ~ Block", varwidth = TRUE)
+boxplot(Vradicule ~ Plate, data = data, main = "Vradicule ~ Plate", varwidth = TRUE)
+boxplot(Vradicule ~ UniqueGeno, data = data, main = "Vradicule ~ UniqueGeno", las = 2, varwidth = TRUE)
+boxplot(Vradicule ~ Zone, data = data, main = "Vradicule ~ Zone", varwidth = TRUE)
+boxplot(Vradicule ~ Plan, data = data, main = "Vradicule ~ Plan", varwidth = TRUE)
+```
+
+
+## Mixed linear models
+### Testing zone effect within intrapop data  
+
+**Vradicule ~ Zone + (1|Geno) + (1|Plate) + (1|Quadrat) + (1|Plant) + (1|IDPod) + (1|IDBox)**  
+
+```{r Vrad_intrapop}
+mod1 <- lmer(Vradicule ~ Zone + (1|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDPod) + (1|IDBox), data = data_intrapop)
+# summary(mod1)
+mod2 <- lmer(Vradicule ~ (1|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDPod) + (1|IDBox), data = data_intrapop)
+anova(mod1, mod2)
+```
+There is no zone effect on the speed of radicle emergence in the intrapop dataset, we can continue with only a Plan effect on the whole dataset (Block effect is removed from this model as all the seed from the intrapop dataset germinated during Block 1).  
+
+
+### Testing whole dataset  
+
+*Vradicule ~ Block + Plan + (0 + Plan|Geno) + (1|Plate) + (1|Quadrat) + (1|Plant) + (1|Pod) + (1|Pod)*  
+
+The model simplification is done using LRT and the results are verified with AICc.  
+
+### Results  
+Selected model: **Vradicule ~ Block + (1|Plate) + (1|Quadrat) + (1|Plant) + (1|Pod)**  
+
+```{r best_Vrad}
+m <- lmer(Vradicule ~ Block + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDPod), data = data)
+kable(summary(m)$coefficients, digits = 3)
+
+Vrad_vartot = 0.17761 + 0.04223 + 0.02127 + 0.02196 + 0.67002
+Vrad_varPlant = round(((as.numeric(VarCorr(m)$Plant)*100)/Vrad_vartot), 2)
+Vrad_varPod = round(((as.numeric(VarCorr(m)$IDPod)*100)/Vrad_vartot), 2)
+Vrad_varQuadrat = round(((as.numeric(VarCorr(m)$UniqueQuadrat)*100)/Vrad_vartot), 2)
+Vrad_varPlate = round(((as.numeric(VarCorr(m)$Plate)*100)/Vrad_vartot), 2)
+resid = round(((0.67002*100)/Vrad_vartot), 2)
+```
+  
+Percentage of explained variance:  
+
+|Effect      | Block | Quadrat       | Plate       | Plant        | Pod     | Residus |
+|:------|------:|------:|------:|------:|------:|------:|  
+|p-value     |2.2e-16| 0.007073      | 1.888e-07   | 1.647e-08    | 2.2e-16 |         |
+|Variance (%)|       |`r Vrad_varQuadrat`|`r Vrad_varPlate`| `r Vrad_varPlant`| `r Vrad_varPod`|`r resid`|  
+
+On average, seeds from Block 1 have a speed of radicle emergence of 2.62 days, it decreases by 1.07 day in Block 2 and by 1.18 in Block 3.  
+
+### Residuals analysis  
+```{r Vrad_resid, fig.width=6, fig.height=4}
+par(mfrow=c(1,2))
+qqnorm(resid(m))
+qqline(resid(m))
+hist(resid(m), xlim = c(-max(resid(m)), max(resid(m))), main = "Residuals distribution", col = "lightgray")
+
+shapiro.test(resid(m)[1:5000])
+```
+  
+The residuals are not normally distributed but they are centered on zero.  
+
+```{r, fig.width=6, fig.height=4, eval = FALSE}
+#plot(resid(m)~fitted(m))
+par(mfrow = c(1,2))
+plot(na.omit(data$Vradicule) ~ fitted(m), ylab = "Observed values", xlab = "Fitted values")
+plot(resid(m) ~ fitted(m))
+```
+  
+
+### BLUPs  
+BLUPs are computed for the random effects of the model:  
+```{r Vrad_BLUP}
+blup <- ranef(m, condVar = TRUE)
+
+plate <- dotplot(blup)$Plate
+quadrat <- dotplot(blup)$UniqueQuadrat
+pod <- dotplot(blup)$IDPod
+plant <- dotplot(blup)$Plant
+grid.arrange(plate, quadrat, plant, pod, ncol=2, nrow=2)
+
+#sjp.lmer(m, type = "fe", axis.lim = c(-2, 3))
+#sjp.lmer(m, type = "fe.slope", vars = c("Block"))
+```
+
+
+```{r, eval = FALSE}
+par(mfrow = c(2,2))
+qqnorm(blup$UniqueQuadrat[,1], main = "BLUP Quadrat")
+qqline(blup$UniqueQuadrat[,1])
+qqnorm(blup$IDPod[,1], main = "BLUP Pod")
+qqline(blup$IDPod[,1])
+qqnorm(blup$Plant[,1], main = "BLUP Plant")
+qqline(blup$Plant[,1])
+qqnorm(blup$Plate[,1], main = "BLUP Plate")
+qqline(blup$Plate[,1])
+```
+
+### Covariance analysis  
+#### Flowering time  
+```{r}
+vradFlo <- na.omit(data[, c("Vradicule", "Block", "Plate", "UniqueQuadrat", "Plant", "IDPod", "time_flo")])
+m <- lmer(Vradicule ~ Block + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDPod), data = vradFlo)
+m1 <- lmer(Vradicule ~ Block + time_flo + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDPod), data = vradFlo)
+anova(m, m1)
+```
+No significative effect of flowering time on the speed of radicle emergence.  
+
+#### Number of pods per plant  
+```{r}
+vradNbPods <- na.omit(data[, c("Vradicule", "Block", "Plate", "UniqueQuadrat", "Plant", "IDPod", "TotalNbPods")])
+m <- lmer(Vradicule ~ Block + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDPod), data = vradNbPods)
+m1 <- lmer(Vradicule ~ Block + TotalNbPods + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDPod), data = vradNbPods)
+anova(m, m1)
+```
+No significative effect of the number of pods per plant.  
+
+#### Number of seeds per plant  
+```{r}
+vradSeed <- na.omit(data[, c("Vradicule", "Block", "Plate", "UniqueQuadrat", "Plant", "IDPod", "NumSeedPlant")])
+m <- lmer(Vradicule ~ Block + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDPod), data = vradSeed)
+m1 <- lmer(Vradicule ~ Block + NumSeedPlant + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDPod), data = vradSeed)
+anova(m, m1)
+```
+No significative effect of the number of seeds per plant.  
+
+
+
+## Generalized linear mixed model (GLMM): Poisson distribution  
+
+As the residuals of the linear mixed model are not normally distributed, we analyse the speed of radicle emergence with a GLMM fitting a Poisson distribution (count of days until radicle emergence).  
+Two methods have been used to identify the best model: using bootstrap to compute the confidence intervals of each effect's variance and the LRT method.  
+
+### Bootstrap (profiling method)  
+```{r bootstrap, eval = FALSE}
+mod1 <- glmer(Vradicule ~ Block + Plan + (0 + Plan|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDPod) + (1|IDBox) + (1|IDSeed), data = data, family="poisson")
+
+mySumm <- function(.) {
+  c(beta=fixef(.),sigma=as.data.frame(VarCorr(.))[,4])
+}
+
+bootstrap <- bootMer(mod1, mySumm, nsim = 100)
+save(bootstrap, file = "Vrad_bootstrap.RData")
+load("Vrad_bootstrap.RData")
+bootstrap
+# IDBox and IDSeed variances = 0 so they are not significative
+
+CI_IDBox <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 5)
+CI_IDPod <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 6)
+CI_plant <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 7)
+CI_GenoInter <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 8)
+CI_GenoIntra <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 9)
+CI_covGenoPlan <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 10)
+CI_Quadrat <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 11)
+CI_Plate <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 12)
+CI_Seed <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 13)
+CI_intercept <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 1)
+CI_block2 <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 2)
+CI_block3 <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 3)
+CI_planIntra <- boot.ci(bootstrap, conf = 0.95, type = "norm", index = 4)
+
+interceptInf <- as.data.frame(CI_intercept[4])[1,2] # log scale
+interceptSup <- as.data.frame(CI_intercept[4])[1,3]
+estIntercept <- as.numeric(fixef(mod1)[1])
+intercept <- c(estIntercept, interceptInf, interceptSup)
+
+block2Inf <- as.data.frame(CI_block2[4])[1,2]
+block2Sup <- as.data.frame(CI_block2[4])[1,3]
+estBlock2 <- as.numeric(fixef(mod1)[2])
+block2 <- c(estBlock2, block2Inf, block2Sup)
+
+block3Inf <- as.data.frame(CI_block3[4])[1,2]
+block3Sup <- as.data.frame(CI_block3[4])[1,3]
+estBlock3 <- as.numeric(fixef(mod1)[3])
+block3 <- c(estBlock3, block3Inf, block3Sup)
+
+planIntraInf <- as.data.frame(CI_planIntra[4])[1,2]
+planIntraSup <- as.data.frame(CI_planIntra[4])[1,3]
+estPlanIntra <- as.numeric(fixef(mod1)[4])
+PlanIntra <- c(estPlanIntra, planIntraInf, planIntraSup)
+
+BoxInf <- as.data.frame(CI_IDBox[4])[1,2]
+BoxSup <- as.data.frame(CI_IDBox[4])[1,3]
+varBox <- as.data.frame(VarCorr(mod1))[1,4]
+Box <- c(varBox, BoxInf, BoxSup)
+
+PodInf <- as.data.frame(CI_IDPod[4])[1,2]
+PodSup <- as.data.frame(CI_IDPod[4])[1,3]
+varPod <- as.data.frame(VarCorr(mod1))[2,4]
+Pod <- c(varPod, PodInf, PodSup)
+
+PlantInf <- as.data.frame(CI_plant[4])[1,2]
+PlantSup <- as.data.frame(CI_plant[4])[1,3]
+varPlant <- as.data.frame(VarCorr(mod1))[3,4]
+Plant <- c(varPlant, PlantInf, PlantSup)
+
+GenoInterInf <- as.data.frame(CI_GenoInter[4])[1,2]
+GenoInterSup <- as.data.frame(CI_GenoInter[4])[1,3]
+varGenoInter <- as.data.frame(VarCorr(mod1))[4,4]
+GenoInter <- c(varGenoInter, GenoInterInf, GenoInterSup)
+
+GenoIntraInf <- as.data.frame(CI_GenoIntra[4])[1,2]
+GenoIntraSup <- as.data.frame(CI_GenoIntra[4])[1,3]
+varGenoIntra <- as.data.frame(VarCorr(mod1))[5,4]
+GenoIntra <- c(varGenoIntra, GenoIntraInf, GenoIntraSup)
+
+QuadratInf <- as.data.frame(CI_Quadrat[4])[1,2]
+QuadratSup <- as.data.frame(CI_Quadrat[4])[1,3]
+varQuadrat <- as.data.frame(VarCorr(mod1))[7,4]
+Quadrat <- c(varQuadrat, QuadratInf, QuadratSup)
+
+PlateInf <- as.data.frame(CI_Plate[4])[1,2]
+PlateSup <- as.data.frame(CI_Plate[4])[1,3]
+varPlate <- as.data.frame(VarCorr(mod1))[8,4]
+Plate <- c(varPlate, PlateInf, PlateSup)
+
+SeedInf <- as.data.frame(CI_Seed[4])[1,2]
+SeedSup <- as.data.frame(CI_Seed[4])[1,3]
+varSeed <- as.data.frame(VarCorr(mod1))[9,4]
+Seed <- c(varSeed, SeedInf, SeedSup)
+
+poissonProfiling <- rbind(intercept, block2, block3, PlanIntra, Box, Pod, Plant, GenoInter, GenoIntra, Quadrat, Plate, Seed)
+colnames(poissonProfiling) <- c("intercept/variance", "CI_inf", "CI_sup")
+save(poissonProfiling, file = "poisson.RData")
+```
+
+The confidence intervals (CI) of the model's effects were determined using 100 bootstrap simulations:  
+```{r}
+load("poisson.RData")
+poissonProfiling
+```
+
+For some effects variance, the confidence intervals include 0, which means that the variance is not different from 0:  
+
+  - Box  
+  - Pod  
+  - Genotype within interpop
+  - Genotype within intrapop  
+  - Quadrat  
+  - Plate  
+  - Seed  
+
+Using the profiling method, the model for the speed of radicle emergence would simplify as: **Vrad ~ Block + (1|Plant) + (1|Plate)**  
+
+#### Residuals analysis  
+```{r}
+profiling <- glmer(Vradicule ~ Block + (1|Plant) + (1|Plate), data = data, family = "poisson")
+
+par(mfrow=c(1,2))
+qqnorm(resid(profiling))
+qqline(resid(profiling))
+hist(resid(profiling), xlim = c(-max(resid(profiling)), max(resid(profiling))), main = "Residuals distribution", col = "lightgray")
+```
+
+The residuals are not normally distributed.  
+
+
+
+### LRT method  
+
+Using LRT method, the simplified model is **Vrad ~ Block + (1|Quadrat) + (1|Plnt) + (1|Plate)**  
+```{r}
+VradLRT <- glmer(Vradicule ~ Block + (1|Plate) + (1|UniqueQuadrat) + (1|Plant), data = data, family = "poisson")
+summary(VradLRT)
+```
+
+#### Residuals analysis  
+```{r}
+par(mfrow=c(1,2))
+qqnorm(resid(VradLRT))
+qqline(resid(VradLRT))
+hist(resid(VradLRT), xlim = c(-max(resid(VradLRT)), max(resid(VradLRT))), main = "Residuals distribution", col = "lightgray")
+```
+
+The residuals are not normally distributed.  
+
+
+# Cotyledon emergence  
+
+The speed of cotyledon emergence was computed as the difference between the observation of deployed cotyledons and the date at which the seed was first observed swollen.  
+
+Effects looked into:  
+
+  - Genetic: genotype of the mother plant (within each plan, intrapop and interpop)  
+  - Environment: Plan (intra/interpop), Zone (within intrapop), Quadrat, Pod, mother plant (= maternal environment)  
+  - Experiment: block, plate, box  
+
+
+
+## Boxplots  
+```{r cotyledon}
+# Boxplot cotyledon
+par(mfrow=c(2,2))
+boxplot(Vcotyledon ~ Block, data = data, main = "Vcotyledon ~ Block", varwidth = TRUE, xlab = "Block", ylab = "Cotyledon")
+boxplot(Vcotyledon ~ Plate, data = data, main = "Vcotyledon ~ Plate", varwidth = TRUE, xlab = "Plate", ylab = "Cotyledon")
+boxplot(Vcotyledon ~ UniqueGeno, data = data, main = "Vcotyledon ~ UniqueGeno", varwidth = TRUE, ylab = "Cotyledon", las = 2)
+boxplot(Vcotyledon ~ Zone0, data = data, main = "Vcotyledon ~ Zone", varwidth = TRUE, xlab = "Zone", ylab = "Cotyledon")
+# The width of a boxplot is proportional to sample size
+
+#par(mfrow=c(1,2))
+#hist(data$Vcotyledon, main="Distribution of cotyledon speed", xlab="Cotyledon speed", col="grey")
+#qqnorm(data$Vcotyledon)
+#qqline(data$Vcotyledon)
+```
+
+
+## Mixed linear models  
+### Testing zone effect within intrapop data  
+
+**Vcotyledon ~ Zone + (1|Geno) + (1|Plate) + (1|Quadrat) + (1|Plant) + (1|Box) + (1|Pod)**  
+```{r Vcot_intrapop}
+mod1 <- lmer(Vcotyledon ~ Zone + (1|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data_intrapop)
+mod2 <- lmer(Vcotyledon ~ (1|UniqueGeno) + (1|Plate) + (1|UniqueQuadrat) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data_intrapop)
+anova(mod1, mod2)
+#summary(mod1)
+```
+There is a significative Zone effect within the Intrapop data, we cannot remove that effect.  
+We will use the variable Zone0, which has the value 0 when it is within Interpop, and 3, 8 or 12 when it is within Intrapop. This variable encompasses both the Zone and the Plan effects.  
+
+### Testing whole dataset  
+
+Model simplification is performed using the LRT method and confirming using AICc.  
+
+## Results  
+
+**Vcotyledon ~ Block + Zone0 + (1|Geno) + (1|Plant) + (1|Box) + (1|Pod)**  
+
+```{r best_Vcot}
+m <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+kable(summary(m)$coefficients, digits = 3)
+
+Vcot_vartot <- 0.16397+0.19537+0.07594+0.08976+1.23342
+Vcot_varBox <- (as.numeric(VarCorr(m)$IDBox)*100)/Vcot_vartot
+Vcot_varPod <- (as.numeric(VarCorr(m)$IDPod)*100)/Vcot_vartot
+Vcot_varPlant <- (as.numeric(VarCorr(m)$Plant)*100)/Vcot_vartot
+Vcot_varGeno <- (as.numeric(VarCorr(m)$UniqueGeno)*100)/Vcot_vartot
+Vcot_residuals <- (1.23342*100)/Vcot_vartot
+```
+
+Percentage of explained variance:  
+
+|Effect   | Block | Zone0 | Geno   | Plant      | Pod      | Box   | Residuals|
+|:------|------:|------:|------:|------:|------:|------:|------:|   
+|p-value     |2.2e-16| 4.93e-10  | 2.172e-5       | 3.317e-08        | 1.009e-07      | 2.186e-08     | |
+|Variance (%)|       |           |`r Vcot_varGeno`| `r Vcot_varPlant`| `r Vcot_varPod`|`r Vcot_varBox`|`r Vcot_residuals`|  
+
+
+## Residuals analysis  
+```{r Vcot_resid, fig.width=6, fig.height=5}
+par(mfrow=c(1,2))
+qqnorm(resid(m))
+qqline(resid(m))
+hist(resid(m), xlim = c(-max(resid(m)), max(resid(m))), col = "lightgray", main = "Residuals distribution")
+```
+The residuals seem to be normally distributed and centered around zero.  
+
+## BLUPs  
+BLUPs are computed for the genotype random effect:  
+```{r Vcot_BLUP, fig.width=10, fig.height=8}
+blup <- ranef(m, condVar = TRUE)
+# Distribution des blups
+dotplot(blup)$UniqueGeno
+```
+
+## Random effects distributions  
+```{r, fig.width=12, fig.height=10}
+#De même les effets aléatoires doivent être explorés comme pour les résidus :
+par(mfrow = c(4, 2))
+qqnorm(blup$UniqueGeno[,1], main = "UniqueGeno")
+qqline(blup$UniqueGeno[,1])
+hist(blup$UniqueGeno[,1], main = "BLUP Geno", xlim = c(-max(blup$UniqueGeno[,1]), max(blup$UniqueGeno[,1])), col = "lightgray", xlab = NULL)
+qqnorm(blup$IDBox[,1], main = "IDBox")
+qqline(blup$IDBox[,1])
+hist(blup$IDBox[,1], main = "BLUP Box", xlim = c(-max(blup$IDBox[,1]), max(blup$IDBox[,1])), col = "lightgray", xlab = NULL)
+qqnorm(blup$IDPod[,1], main = "IDPod")
+qqline(blup$IDPod[,1])
+hist(blup$IDPod[,1], main = "BLUP Pod", xlim = c(-max(blup$IDPod[,1]), max(blup$IDPod[,1])), col = "lightgray", xlab = NULL)
+qqnorm(blup$Plant[,1], main = "Plant")
+qqline(blup$Plant[,1])
+hist(blup$Plant[,1], main = "BLUP Plant", xlim = c(-max(blup$Plant[,1]), max(blup$Plant[,1])), col = "lightgray", xlab = NULL)
+```
+
+
+## Covariance analysis - Phenotypic compromises  
+
+Is there an effect of flowering time, of the number of pods/seeds per plant on the speed of cotyledon emergence?  
+
+### Flowering time  
+```{r}
+# Flowering time
+dataFlowering <- data[,-26:-30]
+dataFlowering <- dataFlowering[, -12:-24]
+dataFlowering <- dataFlowering[, -5:-8]
+dataFlowering <- dataFlowering[, -3]
+dataFlowering <- na.omit(dataFlowering)
+
+m <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plant) + (1|IDBox) + (1|IDPod), data = dataFlowering)
+m1 <- lmer(Vcotyledon ~ Block + Zone0 + time_flo + (1|UniqueGeno) + (1|Plant) + (1|IDBox) + (1|IDPod), data = dataFlowering)
+anova(m, m1)
+# marginally significative effect of flowering time
+
+kable(summary(m1)$coefficients, digits = 3)
+```
+
+When flowering occurred late, the speed of cotyledon emergence decreases.  
+
+### Number of pods per plant  
+```{r}
+dataPods <- data[, -28:-30]
+dataPods <- dataPods[, -12:-26]
+dataPods <- dataPods[, -5:-8]
+dataPods <- dataPods[, -3]
+dataPods <- na.omit(dataPods)
+
+m <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plant) + (1|IDBox) + (1|IDPod), data = dataPods)
+m1 <- lmer(Vcotyledon ~ Block + Zone0 + TotalNbPods + (1|UniqueGeno) + (1|Plant) + (1|IDBox) + (1|IDPod), data = dataPods)
+anova(m, m1)
+# marginally significative effect of the number of pods per plant
+
+kable(summary(m1)$coefficients, digits = 3)
+```
+
+When the number of pods per plant increases, the cotyledons go out more slowly.  
+
+### Number of seeds per plant  
+```{r}
+dataSeed <- data[, -29:-30]
+dataSeed <- dataSeed[, -12:-27]
+dataSeed <- dataSeed[, -5:-8]
+dataSeed <- dataSeed[, -3]
+dataSeed <- na.omit(dataSeed)
+
+m <- lmer(Vcotyledon ~ Block + Zone0 + (1|UniqueGeno) + (1|Plant) + (1|IDBox) + (1|IDPod), data = dataSeed)
+m1 <- lmer(Vcotyledon ~ Block + Zone0 + NumSeedPlant + (1|UniqueGeno) + (1|Plant) + (1|IDBox) + (1|IDPod), data = dataSeed)
+anova(m, m1)
+# Significative effect of the number of seeds per plant
+
+kable(summary(m1)$coefficients, digits = 3)
+
+#sjp.lmer(m1, type = "fe.slope", vars = "NumSeedPlant")
+```
+
+When the number of seeds per plant increases, it takes a longer time for the cotyledon to emerge.  
+
+Complete model with all the covariables: **Vcot ~ Block + Zone + time_flo + NbPods + NbSeeds + (1|Geno) + (1|Plant) + (1|Box) + (1|Pod)**  
+```{r}
+m <- lmer(Vcotyledon ~ Block + Zone0 + time_flo + TotalNbPods + NumSeedPlant + (1|UniqueGeno) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+kable(summary(m)$coefficients, digits = 3)
+```
+
+
+```{r, fig.width=8, fig.height=6}
+par(mfrow=c(1,2))
+qqnorm(resid(m))
+qqline(resid(m))
+hist(resid(m), xlim = c(-max(resid(m)), max(resid(m))), col = "lightgray", main = "Residuals distribution")
+
+#sjp.lmer(m, type = "fe")
+#sjp.lmer(m, type = "fe.slope", vars = c("time_flo", "NumSeedPlant", "TotalNbPods"))
+```
+
+Bootstrap analysis  
+```{r, eval = FALSE}
+m <- lmer(Vcotyledon ~ Block + Zone0 + time_flo + TotalNbPods + NumSeedPlant + (1|UniqueGeno) + (1|Plant) + (1|IDBox) + (1|IDPod), data = data)
+
+mySumm <- function(.) {
+  c(beta=fixef(.),sigma=as.data.frame(VarCorr(.))[,4])
+}
+
+bootstrap <- bootMer(m, mySumm, nsim = 100)
+Vcot_bootstrap <- bootstrap
+save(Vcot_bootstrap, file = "Vcot_bootstrap.RData")
+
+```
+
+```{r}
+load("Vcot_bootstrap.RData")
+
+CI_Vcot <- NULL
+for (i in 1:14){
+  if (i <= 9){
+    CI <- boot.ci(Vcot_bootstrap, conf = 0.95, type = "norm", index = i)
+    CI_inf <- as.data.frame(CI[4])[1,2]
+    CI_sup <- as.data.frame(CI[4])[1,3]
+    est <- as.numeric(fixef(m)[i])
+    CI_tmp <- c(est, CI_inf, CI_sup)
+    CI_Vcot <- rbind(CI_Vcot, CI_tmp)
+  }
+  else {
+    CI <- boot.ci(Vcot_bootstrap, conf = 0.95, type = "norm", index = i)
+    CI_inf <- as.data.frame(CI[4])[1,2]
+    CI_sup <- as.data.frame(CI[4])[1,3]
+    est <- as.data.frame(VarCorr(m))[(i-9),4]
+    CI_tmp <- c(est, CI_inf, CI_sup)
+    CI_Vcot <- rbind(CI_Vcot, CI_tmp)
+  }
+}
+colnames(CI_Vcot) <- c("Estimate", "CI_inf", "CI_sup")
+
+kable(cbind(summary(m)$coefficients[, 1], CI_Vcot[1:9,2:3]), digits = 3)
+kable(cbind(as.data.frame(VarCorr(m))[,c("grp", "vcov")], CI_Vcot[10:14, 2:3]))
+```
+
+
+
+
+# Number of seeds per pod  
+
+**Are there genotypes that produce more/less seeds per pod? Is there a type of environment in which plants produce more seeds per pod? Is there a maternal effect on the production of seeds?**  
+
+## Boxplots  
+```{r NbSeeds}
+# Each line of the dataframe corresponds to one pod
+seed <- data[, c("Plant", "Zone", "Zone0", "Plan", "UniqueQuadrat", "UniqueGeno", "IDPod", "Block", "NbSeed", "time_flo")]
+seed <- unique(seed)
+row.names(seed) <- 1:nrow(seed)
+
+par(mfrow=c(2, 2))
+boxplot(NbSeed ~ UniqueGeno, data = seed, main = "NbSeed ~ UniqueGeno", varwidth = TRUE, ylab = "Seed number", las = 2)
+boxplot(NbSeed ~ Zone, data = seed, main = "NbSeed ~ Zone", varwidth = TRUE, xlab = "Zone", ylab = "Seed number")
+boxplot(NbSeed ~ Plan, data = seed, main = "NbSeed ~ Plan", varwidth = TRUE, xlab = "Plan", ylab = "Seed number")
+boxplot(NbSeed ~ UniqueQuadrat, data = seed, main = "NbSeed ~ Quadrat", varwidth = TRUE, xlab = "Quadrat", ylab = "Seed number", las = 2)
+# The width of a boxplot is proportional to sample size
+```
+
+## Mixed linear models  
+### Testing Zone effect within Intrapop data  
+```{r seed_intrapop}
+seed_intrapop <- subset(seed, Plan == "Intrapop", select = c(NbSeed, Zone, Plan, UniqueGeno, UniqueQuadrat, Plant, time_flo))
+#summary(seed_intrapop)
+
+#par(mfrow = c(1, 1))
+#boxplot(NbSeed ~ Zone, data = seed_intrapop)
+
+mod1 <- lmer(NbSeed ~ Zone + time_flo + (1|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seed_intrapop)
+mod2 <- lmer(NbSeed ~ time_flo + (1|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seed_intrapop)
+anova(mod1, mod2)
+# No zone effect
+
+seed <- seed[, c("Plant", "Zone0", "Plan", "UniqueQuadrat", "UniqueGeno", "IDPod", "Block", "NbSeed", "time_flo")]
+seed2 <- na.omit(seed)
+```
+There is no Zone effect within the intrapop dataset.  
+
+### Testing the whole dataset  
+
+
+
+### Results  
+Model selected: **NbSeed ~ Plan + time_flo + (1|Quadrat) + (1|Plant)**  
+
+```{r best_NbSeed}
+m <- lmer(NbSeed ~ Plan + time_flo + (1|UniqueQuadrat) + (1|Plant), data = seed2)
+kable(summary(m)$coefficients, digits = 3)
+
+NbSeed_vartot <- 0.2177 + 0.2355 + 2.2771
+NbSeed_varPlant <- round(((as.numeric(VarCorr(m)$Plant)*100)/NbSeed_vartot), 2)
+NbSeed_varQuadrat <- round(((as.numeric(VarCorr(m)$UniqueQuadrat)*100)/NbSeed_vartot), 2)
+NbSeed_resid <- round(((2.2771*100)/NbSeed_vartot), 2)
+```
+
+Percentage of explained variance :  
+
+|Effect   | Plan      | time_flo | Plant       | Quadrat       | Residuals|
+|:------|------:|------:|------:|------:|------:|
+|p-value  | 2.773e-5  | 1.063e-5 | 0.004367    | 9.498e-5      |          |
+|Variance (%) |           |          |`r NbSeed_varPlant`|`r NbSeed_varQuadrat`|`r NbSeed_resid`|
+
+Plants located in Intrapop produce on average 1.98 seeds less than plants located in interpop (6.86 seeds per pod on average).  
+
+## residuals analysis  
+```{r NbSeed_resid, fig.width=8, fig.height=6}
+par(mfrow = c(1,2))
+qqnorm(resid(m), ylim = c(-max(sqrt((resid(m))^2)), max(sqrt((resid(m))^2))), xlim = c(-max(sqrt((resid(m))^2)), max(sqrt((resid(m))^2))))
+qqline(resid(m), col = "red")
+hist(resid(m), xlim = c(-max(sqrt((resid(m))^2)), max(sqrt((resid(m))^2))), main = "Residuals distribution", col = "lightgray", las = 1)
+```
+
+## BLUPs  
+BLUPs were computed for the random effects of the model:  
+```{r NbSeed_BLUP}
+blup <- ranef(m, condVar = TRUE)
+
+par(mfrow = c(2,2))
+qqnorm(blup$Plant[,1], main = "Plant", las = 1)
+qqline(blup$Plant[,1])
+hist(blup$Plant[,1], main = "BLUP Plant", xlim = c(-max(sqrt((blup$Plant[,1])^2)), max(sqrt((blup$Plant[,1])^2))), col = "lightgray", las = 1)
+qqnorm(blup$UniqueQuadrat[,1], main = "Quadrat", las = 1)
+qqline(blup$UniqueQuadrat[,1])
+hist(blup$UniqueQuadrat[,1], main = "BLUP Quadrat", xlim = c(-max(sqrt((blup$UniqueQuadrat[,1])^2)), max(sqrt((blup$UniqueQuadrat[,1])^2))), col = "lightgray", las = 1)
+```
+
+## Bootstrap  
+Confidence intervals (CI) of the estimated parameters (slopes and variances) are computed using the bootstrap method.  
+```{r, eval =FALSE}
+m <- lmer(NbSeed ~ Plan + time_flo + (1|UniqueQuadrat) + (1|Plant), data = seed2)
+
+mySumm <- function(.) {
+  c(beta=fixef(.),sigma=as.data.frame(VarCorr(.))[,4])
+}
+
+seedPod_bootstrap <- bootMer(m, mySumm, nsim = 1000)
+save(seedPod_bootstrap, file = "seedPod_bootstrap.RData")
+```
+
+```{r}
+load("seedPod_bootstrap.RData")
+
+CI_seedPod <- NULL
+for (i in 1:6){
+  if (i <= 3){
+    CI <- boot.ci(seedPod_bootstrap, conf = 0.95, type = "norm", index = i)
+    CI_inf <- as.data.frame(CI[4])[1,2]
+    CI_sup <- as.data.frame(CI[4])[1,3]
+    est <- as.numeric(fixef(m)[i])
+    CI_tmp <- c(est, CI_inf, CI_sup)
+    CI_seedPod <- rbind(CI_seedPod, CI_tmp)
+  }
+  else {
+    CI <- boot.ci(seedPod_bootstrap, conf = 0.95, type = "norm", index = i)
+    CI_inf <- as.data.frame(CI[4])[1,2]
+    CI_sup <- as.data.frame(CI[4])[1,3]
+    est <- as.data.frame(VarCorr(m))[(i-3),4]
+    CI_tmp <- c(est, CI_inf, CI_sup)
+    CI_seedPod <- rbind(CI_seedPod, CI_tmp)
+  }
+}
+colnames(CI_seedPod) <- c("Estimate", "CI_inf", "CI_sup")
+
+kable(cbind(summary(m)$coefficients[, 1], CI_seedPod[1:3,2:3]), digits = 3)
+kable(cbind(as.data.frame(VarCorr(m))[,c("grp", "vcov")], CI_seedPod[4:6, 2:3]))
+```
+
+The value 0 is comprised in the confidence interval of UniqueQuadrat estimation of variance
+
+
+# Number of seeds per plant  
+
+**Is there a genetic effect on the amount of seeds produced per plant? Is there an environmental effect? Does flowering date impact the amount of seeds produced per plant?**  
+
+## Boxplots  
+```{r seedPlant}
+seedPlant <- aggregate(seed$NbSeed ~ seed$Plant, FUN = sum)
+colnames(seedPlant) <- c("Plant", "NbSeedPlant")
+seedPlant <- merge(seedPlant, data, by = "Plant")
+seedPlant <- unique(seedPlant[, c("Plant", "NbSeedPlant", "Zone", "Zone0", "Plan", "UniqueQuadrat", "UniqueGeno", "time_flo", "L_max_flo", "TotalNbPods")])
+
+par(mfrow=c(2, 2))
+boxplot(NbSeedPlant ~ UniqueGeno, data = seedPlant, main = "NbSeedPlant ~ UniqueGeno", varwidth = TRUE, ylab = "Number of seeds per plant", las = 2)
+boxplot(NbSeedPlant ~ Zone0, data = seedPlant, main = "NbSeedPlant ~ Zone", varwidth = TRUE, xlab = "Zone", ylab = "Number of seeds per plant", las = 1)
+boxplot(NbSeedPlant ~ Plan, data = seedPlant, main = "NbSeedPlant ~ Plan", varwidth = TRUE, xlab = "Plan", ylab = "Number of seeds per plant", las = 1)
+boxplot(NbSeedPlant ~ UniqueQuadrat, data = seedPlant, main = "NbSeedPlant ~ Quadrat", varwidth = TRUE, xlab = "Quadrat", ylab = "Number of seeds per plant", las = 2)
+```
+
+
+## Generalized mixed linear models  
+This is count data so we use a GLMM with a Poisson distribution.  
+
+### Testing Zone effect within Intrapop data  
+```{r}
+seedPlant_intra <- subset(seedPlant, Plan == "Intrapop", select = c(NbSeedPlant, Zone, Plan, UniqueGeno, UniqueQuadrat, Plant, time_flo, TotalNbPods))
+
+mod1 <- glmer(NbSeedPlant ~ Zone + (1|UniqueGeno:Zone) + (1|UniqueQuadrat) + (1|Plant), data = seedPlant_intra, family = "poisson")
+mod2 <- glmer(NbSeedPlant ~ (1|UniqueGeno:Zone) + (1|UniqueQuadrat) + (1|Plant), data = seedPlant_intra, family = "poisson")
+anova(mod1, mod2)
+m3 <- glmer(NbSeedPlant ~ Zone + (1|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seedPlant_intra, family = "poisson")
+anova(mod1, m3)
+m4 <- glmer(NbSeedPlant ~ Zone + (1|UniqueGeno) + (1|Plant), data = seedPlant_intra, family = "poisson")
+anova(mod1, m4)
+m5 <- glmer(NbSeedPlant ~ Zone + (1|UniqueGeno) + (1|UniqueQuadrat), data = seedPlant_intra, family = "poisson")
+anova(mod1, m5)
+model.sel(mod1, mod2, m3, m4, m5)
+
+m <- glmer(NbSeedPlant ~ Zone + (1|UniqueQuadrat) + (1|Plant), data = seedPlant_intra, family = "poisson")
+m1 <- glmer(NbSeedPlant ~ (1|UniqueQuadrat) + (1|Plant), data = seedPlant_intra, family = "poisson")
+anova(m, m1)
+m2 <- glmer(NbSeedPlant ~ Zone + (1|Plant), data = seedPlant_intra, family = "poisson")
+anova(m, m2)
+m3 <- glmer(NbSeedPlant ~ Zone + (1|UniqueQuadrat), data = seedPlant_intra, family = "poisson")
+anova(m, m3)
+```
+
+There is a marginally significative zone effect within the intrapop dataset (which comprises 53 plants instead of 143 for the whole dataset).  
+
+```{r}
+seedPlant_inter <- subset(seedPlant, Plan == "interpop", select = c(NbSeedPlant, Plan, UniqueGeno, UniqueQuadrat, Plant, time_flo, TotalNbPods))
+
+m1 <- glmer(NbSeedPlant ~ (1|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seedPlant_inter, family = "poisson")
+m2 <- glmer(NbSeedPlant ~ (1|UniqueQuadrat) + (1|Plant), data = seedPlant_inter, family = "poisson")
+anova(m1, m2)
+m3 <- glmer(NbSeedPlant ~ (1|UniqueGeno) + (1|Plant), data = seedPlant_inter, family = "poisson")
+anova(m1, m3)
+m4 <- glmer(NbSeedPlant ~ (1|UniqueGeno) + (1|UniqueQuadrat), data = seedPlant_inter, family = "poisson")
+anova(m1, m4)
+model.sel(m1, m2, m3, m4)
+
+m <- glmer(NbSeedPlant ~ (1|UniqueGeno) + (1|Plant), data = seedPlant_inter, family = "poisson")
+m1 <- glmer(NbSeedPlant ~ (1|Plant), data = seedPlant_inter, family = "poisson")
+anova(m, m1)
+m2 <- glmer(NbSeedPlant ~ (1|UniqueGeno), data = seedPlant_inter, family = "poisson")
+anova(m, m2)
+model.sel(m, m1, m2)
+
+m <- glmer(NbSeedPlant ~ Plan + (0 + Plan|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seedPlant, family = "poisson")
+summary(m)
+m1 <- glmer(NbSeedPlant ~ (0 + Plan|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seedPlant, family = "poisson")
+anova(m, m1)
+m2 <- glmer(NbSeedPlant ~ Plan + (1|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seedPlant, family = "poisson")
+anova(m, m2)
+m3 <- glmer(NbSeedPlant ~ Plan + (0 + Plan|UniqueGeno) + (1|Plant), data = seedPlant, family = "poisson")
+anova(m, m3)
+m4 <- glmer(NbSeedPlant ~ Plan + (0 + Plan|UniqueGeno) + (1|UniqueQuadrat), data = seedPlant, family = "poisson")
+anova(m, m4)
+model.sel(m, m1, m2, m3, m4)
+
+m <- glmer(NbSeedPlant ~ Plan + (1|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seedPlant, family = "poisson")
+m1 <- glmer(NbSeedPlant ~ (1|UniqueGeno) + (1|UniqueQuadrat) + (1|Plant), data = seedPlant, family = "poisson")
+anova(m, m1)
+m2 <- glmer(NbSeedPlant ~ Plan + (1|UniqueQuadrat) + (1|Plant), data = seedPlant, family = "poisson")
+anova(m, m2)
+m3 <- glmer(NbSeedPlant ~ Plan + (1|UniqueGeno) + (1|Plant), data = seedPlant, family = "poisson")
+anova(m, m3)
+m4 <- glmer(NbSeedPlant ~ Plan + (1|UniqueGeno) + (1|UniqueQuadrat), data = seedPlant, family = "poisson")
+anova(m, m4)
+model.sel(m, m1, m2, m3, m4)
+
+par(mfrow = c(1,2))
+qqnorm(resid(m))
+qqline(resid(m))
+hist(resid(m))
+
+dotplot(ranef(m)$UniqueGeno[1,])
+blup <- ranef(m)
+dotplot(blup$UniqueGeno)
+```
+
+
+### Testing the whole dataset  
+```{r, eval = FALSE}
+seedPlant <- na.omit(seedPlant[, -3:-4])
+mod1 <- lmer(NbSeedPlant ~ Plan + (0 + Plan|UniqueGeno) + (1|UniqueQuadrat), data = seedPlant)
+m2 <- lmer(NbSeedPlant ~ (0 + Plan|UniqueGeno) + (1|UniqueQuadrat), data = seedPlant)
+anova(mod1, m2)
+m3 <- lmer(NbSeedPlant ~ Plan + (1|UniqueGeno) + (1|UniqueQuadrat), data = seedPlant)
+anova(mod1, m3)
+m4 <- lmer(NbSeedPlant ~ Plan + (0 + Plan|UniqueGeno), data = seedPlant)
+anova(mod1, m4)
+model.sel(mod1, m2, m3, m4)
+m5 <- lmer(NbSeedPlant ~ Plan + (1|UniqueGeno), data = seedPlant)
+anova(m4, m5)
+```
+
+### Results  
+Model selected: **NbSeed ~ Plan + (0 + Plan|UniqueGeno)**  
+The genetic variance is different in intrapop and in interpop.  
+```{r}
+# Removing Zone and Zone0 columns
+seedPlant <- na.omit(seedPlant[, -3:-4])
+m <- lmer(NbSeedPlant ~ Plan + (0 + Plan|UniqueGeno), data = seedPlant)
+kable(summary(m)$coefficients, digits = 3)
+
+NbSeedPlant_vartot <- 1.970e+03 + 3.379e-02 + 1.729e+03
+NbSeedPlant_varGenoInter <- round(((as.numeric(VarCorr(m)$UniqueGeno[1,1])*100)/NbSeedPlant_vartot), 2)
+NbSeedPlant_varGenoIntra <- round(((as.numeric(VarCorr(m)$UniqueGeno[2,2])*100)/NbSeedPlant_vartot), 2)
+NbSeedPlant_resid <- round(((1.729e+03*100)/NbSeedPlant_vartot), 2)
+```
+
+Percentage of explained variance :  
+
+|Effect       | Plan   | (1 + Plan:Geno) | Residuals|
+|:------|------:|------:|------:|  
+|p-value      | 0.0012 | 0.002774        |          | 
+|Variance (%) |        |Interpop: `r NbSeedPlant_varGenoInter` Intrapop: `r NbSeedPlant_varGenoIntra`|`r NbSeedPlant_resid`|
+
+
+## Correlations  
+### Flowering time  
+```{r}
+m <- lmer(NbSeedPlant ~ Plan + (0 + Plan|UniqueGeno), data = seedPlant)
+m1 <- lmer(NbSeedPlant ~ Plan + time_flo + (0 + Plan|UniqueGeno), data = seedPlant)
+anova(m, m1)
+kable(summary(m1)$coefficients, digits = 3)
+```
+  
+There is a significative effect of flowering time on the number of seeds produced per plant.  
+
+### Number of pods per plant  
+```{r}
+m <- lmer(NbSeedPlant ~ Plan + time_flo + (0 + Plan|UniqueGeno), data = seedPlant)
+m1 <- lmer(NbSeedPlant ~ Plan + time_flo + TotalNbPods + (0 + Plan|UniqueGeno), data = seedPlant)
+anova(m, m1)
+kable(summary(m1)$coefficients, digits = 3)
+
+NbSeedPlant_vartot <- 1536.1030 + 0.1502 + 247.0584
+NbSeedPlant_varGenoInter <- round(((as.numeric(VarCorr(m1)$UniqueGeno[1,1])*100)/NbSeedPlant_vartot), 2)
+NbSeedPlant_varGenoIntra <- round(((as.numeric(VarCorr(m1)$UniqueGeno[2,2])*100)/NbSeedPlant_vartot), 2)
+NbSeedPlant_resid <- round((((247.0584)*100)/NbSeedPlant_vartot), 2)
+```  
+  
+There is a significative effect of the number of pods per plant on the number of seeds produced.  
+
+Percentage of explained variance :  
+
+|Effect       | Plan   | (1 + Plan:Geno) | Residuals|
+|:------|------:|------:|------:|  
+|p-value      | 0.0012 | 0.002774        |          | 
+|Variance (%) |        |Interpop: `r NbSeedPlant_varGenoInter` Intrapop: `r NbSeedPlant_varGenoIntra`|`r NbSeedPlant_resid`|
+  
+There is far less variability in Intrapop than in Interpop.  
+
+### Residuals analysis  
+```{r}
+par(mfrow = c(1,2))
+qqnorm(resid(m1))
+qqline(resid(m1), col = "red")
+hist(resid(m1), xlim = c(-max(sqrt((resid(m1))^2)), max(sqrt((resid(m1))^2))), main = "Residuals distribution", col = "lightgray", las = 1)
+
+shapiro.test(resid(m1))
+```
+
+### Bootstrap  
+Confidence intervals are computed for the estimations of the model (slopes and variances) using bootstrap method.  
+```{r}
+m1 <- lmer(NbSeedPlant ~ Plan + time_flo + TotalNbPods + (0 + Plan|UniqueGeno), data = seedPlant)
+
+mySumm <- function(.) {
+  c(beta=fixef(.),sigma=as.data.frame(VarCorr(.))[,4])
+}
+
+seedPlant_bootstrap <- bootMer(m1, mySumm, nsim = 1000)
+save(seedPlant_bootstrap, file = "seedPlant_bootstrap.RData")
+```
+
+```{r}
+load("seedPlant_bootstrap.RData")
+
+CI_seedPlant <- NULL
+for (i in 1:8){
+  if (i <= 4){
+    CI <- boot.ci(seedPlant_bootstrap, conf = 0.95, type = "norm", index = i)
+    CI_inf <- as.data.frame(CI[4])[1,2]
+    CI_sup <- as.data.frame(CI[4])[1,3]
+    est <- as.numeric(fixef(m)[i])
+    CI_tmp <- c(est, CI_inf, CI_sup)
+    CI_seedPlant <- rbind(CI_seedPlant, CI_tmp)
+  }
+  else {
+    CI <- boot.ci(seedPlant_bootstrap, conf = 0.95, type = "norm", index = i)
+    CI_inf <- as.data.frame(CI[4])[1,2]
+    CI_sup <- as.data.frame(CI[4])[1,3]
+    est <- as.data.frame(VarCorr(m))[(i-4),4]
+    CI_tmp <- c(est, CI_inf, CI_sup)
+    CI_seedPlant <- rbind(CI_seedPlant, CI_tmp)
+  }
+}
+colnames(CI_seedPlant) <- c("Estimate", "CI_inf", "CI_sup")
+
+kable(cbind(summary(m1)$coefficients[, 1], CI_seedPlant[1:4,2:3]), digits = 3)
+kable(cbind(as.data.frame(VarCorr(m1))[,c("grp", "vcov")], CI_seedPlant[5:8, 2:3]))
+```
+
+
+### BLUPs  
+What are the effects of each genotype in the different environments (intrapop and interpop)?  
+All genotypes are not represented in each environment: there are only the genotypes from Narbonne in Intrapop and there are all the genotypes except Narb_H11.5, Narb_H6 and Narb_H96 in Interpop.  
+```{r NbSeedBLUP}
+blup <- ranef(m1, condVar = TRUE)
+
+#dotplot(blup)
+sjp.lmer(m1, y.offset = 0.4)
+```
+It is difficult to compare the effects of the genotypes in the two environments, as they are not necessarily repeated. 
+
+  - Narbonne_H8: 2.99 in interpop vs. -0.03 in intrapop  
+  - Narbonne_H50: 28.96 in interpop vs. -0.29 in intrapop  
+  - Narbonne_H5: 0.76 in interpop vs. -0.01 in intrapop  
+  - Narbonne_H4: 7.10 in interpop vs. -0.07 in intrapop  
+  - Narbonne_H2: -1.32 in interpop vs. 0.01 in intrapop  
+  - Narbonne_H1: 22.62 in interpop vs. -0.22 in intrapop  
+  
+It seems that the genotype Espagne_H3 produces far less seeds than the other genotypes in Interpop, but this genotype is represented by only one plant.  
+
+Genotype qqplots:  
+```{r}
+sjp.lmer(m1, type = "re.qq")
+#qqnorm(blup$UniqueGeno[,2])
+```
+
+
+Fixed effects correlation:  
+```{r, fig.width=5, fig.height=5}
+#What are the slopes of the fixed effects?  
+#sjp.lmer(m1, type = "fe.slope", y.offset = 0.4, vars = c("Plan"), geom.colors = c("red", "blue", "green"))
+sjp.lmer(m1, type = "fe.cor")
+```
+
+
+
+```{r, eval = FALSE}
+#-2*logLik(mod2)+2*logLik(mod)
+#1-pchisq(-2*logLik(mod2)+2*logLik(mod), 2)
+
+#predict(m3)
+#pnorm(predict(m3))
+#fitted(m3)
+
+#?glmer
+
+# Plan effect
+
+summary(mod41)
+hist(ranef(mod41)$Plant[,1])
+
+mu <- summary(mod5)$coefficients[1, 1]
+VM <- as.numeric(VarCorr(mod5)$Plant)
+
+fixef(mod5)
+predict(mod5,re.form=NA)
+predict(mod5)
+exp(predict(mod5))/(1+exp(predict(mod5)))
+fitted(mod5)
+```
+
+
+# Seed viability analysis   
+
+(Analysis with data pooled by box -> proportion of viable seed in each box)  
+```{r box_data}
+box <- read.table("GerminationAggrBox.csv", header = TRUE, sep = ";", dec = ".")
+#summary(box)
+
+box$IDBox <- as.factor(box$IDBox)
+box$IDPod <- as.factor(box$IDPod)
+box$Zone <- as.factor(box$Zone)
+box$Zone0 <- as.factor(box$Zone0)
+box$Block <- as.factor(box$Block)
+box$Plate <- as.factor(box$Plate)
+
+box_intrapop <- subset(box, Plan == "Intrapop", select = c(propViabilityNA, Block, Zone, UniqueGeno, UniqueQuadrat, Plate, IDPod, Plant, IDBox, NbSeedminusNA, Dormancy))
+```
+
+
+We perform model simplification looking at the effects of different parameters on seed viability's variance, then covariables are added to the simplified model :  
+
+  - NbTotalPods: is there a compromise between the number of pods per mother plant and the viability of the seeds within?  
+  - time_flo: is there a linear relationship between seed viability and the flowering time of the mother plant?  
+
+The viability data is coded as binomial data, we use GLMM for the analysis. Moreover, several link functions can be used, we will test them (using AICc) and keep the one that best fits the data to perform the model simplification.    
+
+## Link function choice  
+The link functions are tested using AICc because all models will have the same number of degrees of freedom and so LRT is impossible.  
+```{r viability_link, warning=FALSE, eval = FALSE}
+logit <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+
+cauchit <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+
+probit <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'probit'), weights = NbSeedminusNA, na.action = na.omit)
+
+cloglog <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cloglog'), weights = NbSeedminusNA, na.action = na.omit)
+
+save(logit, cauchit, probit, cloglog, file = "viability_link.RData")
+```
+
+
+```{r link_sel}
+load("viability_link.RData")
+model.sel(logit, probit, cauchit, cloglog)
+```
+
+The Cauchit link function is better adapted than the Logit link. We will use the Cauchit link to simplify the model but the Logit link to compute heritability (not defined for Cauchit).  
+
+## Model simplication  
+### Zone effect within intrapop  
+Model selection is performed using the LRT method and verifying with AICc.  
+```{r via_intrapop}
+m0 <- glmer(propViabilityNA ~ Zone + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Plate), data = box_intrapop, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+
+m1 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Plate), data = box_intrapop, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+
+anova(m0, m1)
+model.sel(m0, m1)
+```
+There is a marginally significative Zone effect within the intrapop dataset (p-val = 0.08943). We use the variable Zone0 for the simplification with the whole dataset, as it encompasses the information within Zone and Plan.  
+
+### Whole dataset analysis  
+```{r, eval = FALSE}
+m0 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+#summary(m0)
+m01 <- glmer(propViabilityNA ~ Zone0 + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m01)
+m03 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m03)
+m04 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m04)
+m05 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m05)
+m06 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|IDPod) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m06)
+m07 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|IDPod) + (1|Plant) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m07)
+m08 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m08)
+m09 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m09)
+m010 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m010)
+AICc(m0, m01, m03, m04, m05, m06, m07, m08, m09, m010)
+model.sel(m0, m01, m03, m04, m05, m06, m07, m08, m09, m010)
+# No interaction Plan - Genotype
+
+m1 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+m11 <- glmer(propViabilityNA ~ Zone0 + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m11)
+m13 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m13)
+m14 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m14)
+m15 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m15)
+m16 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|IDPod) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m16)
+m17 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m17)
+m18 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m18)
+m19 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m19)
+m110 <- glmer(propViabilityNA ~ Block + Zone0 + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m110)
+AICc(m1, m11, m13, m14, m15, m16, m17, m18, m19, m110)
+model.sel(m1, m11, m13, m14, m15, m16, m17, m18, m19, m110)
+# No Zone0 effect
+
+m2 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+m22 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m22)
+m23 <- glmer(propViabilityNA ~ Block + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m23)
+m24 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m24)
+m25 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m25)
+m26 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m26)
+m27 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m27)
+m28 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m28)
+m29 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m29)
+AICc(m2, m22, m23, m24, m25, m26, m27, m28, m29)
+model.sel(m2, m22, m23, m24, m25, m26, m27, m28, m29)
+# No Quadrat effect
+
+m3 <- m26
+m31 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m31)
+m33 <- glmer(propViabilityNA ~ Block + (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m33)
+m34 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|Plant) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m34)
+m35 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m35)
+m36 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m36)
+m37 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m37)
+m38 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m38)
+AICc(m3, m31, m33, m34, m35, m36, m37, m38)
+model.sel(m3, m31, m33, m34, m35, m36, m37, m38)
+# No Genotype effect
+
+m4 <- m36
+m41 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m41)
+m43 <- glmer(propViabilityNA ~ Block + (1|IDPod) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m43)
+m44 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m44)
+m45 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m45)
+m46 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m46)
+m47 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m47)
+AICc(m4, m41, m43, m44, m45, m46, m47)
+model.sel(m4, m41, m43, m44, m45, m46, m47)
+# No Block effect
+
+m5 <- m41
+m51 <- glmer(propViabilityNA ~ (1|IDPod) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m51)
+m52 <- glmer(propViabilityNA ~ (1|IDBox) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m52)
+m53 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m53)
+m54 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m54)
+m55 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m55)
+AICc(m5, m51, m52, m53, m54, m55)
+model.sel(m5, m51, m52, m53, m54, m55)
+# No Plate effect
+
+m6 <- m54
+m61 <- glmer(propViabilityNA ~ (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m6, m61)
+m62 <- glmer(propViabilityNA ~ (1|IDBox) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m6, m62)
+m63 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m6, m63)
+m64 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m6, m64)
+AICc(m6, m61, m62, m63, m64)
+model.sel(m6, m61, m62, m63, m64)
+
+summary(m6)
+```
+
+### Results  
+Model selection: **SeedViability ~ (1|Box) + (1|Pod) + (1|Plant) + (1|Block:Plate)**  
+
+Model simplification using the logit link results in the same best model (with AICc = 3646.737 instead of 3627.677), we can then use this link function to compute R² and repeatability for the model (not defined with cauchit link).  
+Observations are clustered within Petri boxes, and boxes are nested within pods (themselves nested within mother plants)  
+```{r results_Viability}
+best <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+summary(best)
+
+bestlogit <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+
+Viab_vartot <- 0.2912 + 0.9749 + 0.7432 + 0.2962
+Viab_varBox <- round(((as.numeric(VarCorr(bestlogit)$IDBox)*100)/Viab_vartot), 2)
+Viab_varPod <- round(((as.numeric(VarCorr(bestlogit)$IDPod)*100)/Viab_vartot), 2)
+Viab_varPlant <- round(((as.numeric(VarCorr(bestlogit)$Plant)*100)/Viab_vartot), 2)
+Viab_varBlockPlate <- round(((as.numeric(VarCorr(bestlogit)$Block)*100)/Viab_vartot), 2)
+
+Cauchit_vartot <- 0.4285 + 1.0399 + 0.9168 + 0.3304
+Cauchit_varBox <- round(((as.numeric(VarCorr(best)$IDBox)*100)/Cauchit_vartot), 2)
+Cauchit_varPod <- round(((as.numeric(VarCorr(best)$IDPod)*100)/Cauchit_vartot), 2)
+Cauchit_varPlant <- round(((as.numeric(VarCorr(best)$Plant)*100)/Cauchit_vartot), 2)
+Cauchit_varBlockPlate <- round(((as.numeric(VarCorr(best)$Block)*100)/Cauchit_vartot), 2)
+
+meanViability <- 1/(1+exp(-(as.numeric(fixef(bestlogit)[1]))))
+```
+
+Mean viability = `r meanViability`  
+
+Percentage of explained variance with logit link:  
+
+|Effect       | Box       | Pod       | Plant       | Block:Plate|   
+|:------|------:|------:|------:|------:|  
+|p-value      | 0.002293  | 2.261e-09 | 2.2e-16     | 8.305e-10  |   
+|Variance (%) | `r Viab_varBox` | `r Viab_varPod` |`r Viab_varPlant`|`r Viab_varBlockPlate`|  
+
+
+#### Bootstrap  
+```{r, eval = FALSE}
+bestlogit <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+
+mySumm <- function(.) {
+  c(beta=fixef(.),sigma=as.data.frame(VarCorr(.))[,4])
+}
+
+viability_bootstrap <- bootMer(bestlogit, mySumm, nsim = 100)
+save(viability_bootstrap, file = "viability_bootstrap.RData")
+```
+
+```{r}
+load("viability_bootstrap.RData")
+
+CI_viability <- NULL
+for (i in 1:5){
+  if (i <= 1){
+    CI <- boot.ci(viability_bootstrap, conf = 0.95, type = "norm", index = i)
+    CI_inf <- as.data.frame(CI[4])[1,2]
+    CI_sup <- as.data.frame(CI[4])[1,3]
+    est <- as.numeric(fixef(m)[i])
+    CI_tmp <- c(est, CI_inf, CI_sup)
+    CI_viability <- rbind(CI_viability, CI_tmp)
+  }
+  else {
+    CI <- boot.ci(viability_bootstrap, conf = 0.95, type = "norm", index = i)
+    CI_inf <- as.data.frame(CI[4])[1,2]
+    CI_sup <- as.data.frame(CI[4])[1,3]
+    est <- as.data.frame(VarCorr(m))[(i-1),4]
+    CI_tmp <- c(est, CI_inf, CI_sup)
+    CI_viability <- rbind(CI_viability, CI_tmp)
+  }
+}
+colnames(CI_viability) <- c("Estimate", "CI_inf", "CI_sup")
+
+#kable(cbind(summary(bestlogit)$coefficients[1, 1], CI_viability[1,2:3]), digits = 3)
+kable(cbind(as.data.frame(VarCorr(bestlogit))[,c("grp", "vcov")], CI_viability[2:5, 2:3]))
+```
+  
+Intercept: `r summary(bestlogit)$coefficients[1, 1]` [`r CI_viability[1,2]` - `r CI_viability[1,3]`]  
+
+
+Percentage of explained variance with cauchit link:  
+
+|Effect       | Box       | Pod       | Plant       | Block:Plate|   
+|:------|------:|------:|------:|------:|  
+|p-value      | 0.002293  | 2.261e-09 | 2.2e-16     | 8.305e-10  |   
+|Variance (%) | `r Cauchit_varBox` | `r Cauchit_varPod` |`r Cauchit_varPlant`|`r Cauchit_varBlockPlate`|  
+
+
+## Covariable analysis  
+### Flowering time of the mother plant  
+#### Model comparison  
+
+We test the fixed effect flowering time in the simplified model we obtained before (with logit link).  
+```{r time_flo}
+boxNA <- subset(box, select = c("IDBox", "IDPod", "Plant", "Block", "Plate", "time_flo", "propViabilityNA", "NbSeedminusNA"))
+boxNA <- na.omit(boxNA)
+
+m0 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = boxNA, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+
+m1 <- glmer(propViabilityNA ~ time_flo + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = boxNA, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m1)
+```
+There is a significative effect of flowering time on the probability that a seed is viable (p-val = 0.01767).  
+
+#### Results  
+```{r flo_results}
+kable(summary(m1)$coefficients, digits = 3)
+#summary(m1)
+
+intercept <- 1/(1+exp(-(as.numeric(fixef(m1)[1]))))
+slope_timeflo <- 1/(1+exp(-(as.numeric(fixef(m1)[1]) + as.numeric(fixef(m1)[2]))))
+```
+  
+The new mean in the proportion of viable seeds per pod is `r intercept`, and the slope according to flowering time is `r round(slope_timeflo, 4) - round(intercept, 4)`. This means that when flowering is late, there are less viable seeds produced.  
+
+#### R² computation  
+Marginal ($R^{2}_{GLMM}(m)$) and conditional($R^{2}_{GLMM}(c)$) R² are computed using the method from Nakagawa and Schielzeth (2013).  
+
+Marginal R² (variance explained by fixed factors):  
+$R^{2}_{GLMM}(m) = \frac {\sigma_{f}^{2}} { \sigma_{f}^{2} + \sum_{l=1}^{u} \sigma_{l}^{2} + \sigma_{e}^{2} + \frac {\pi^{2}}{3}}$  
+
+where  
+
+  - $\sigma_{f}^{2}$ is the variance calculated from the fixed effect components of the GLMM  
+  
+  - $\sigma_{l}^{2}$ is the variance of the $l$th random factor (with u the number of random factors in the GLMM)  
+  
+  - $\sigma_{e}^{2}$ is the additive dispersion component (residual variance, so in our model it corresponds to the variance of IDBox)  
+  
+  - $\frac {\pi^{2}}{3}$ is the distribution specific variance (for binary and proportion data under logit link)  
+
+
+Conditional R² (variance explained by both fixed and random factors):  
+$R^{2}_{GLMM}(c) = \frac {\sigma_{f}^{2} + \sum_{l=1}^{u} \sigma_{l}^{2}} { \sigma_{f}^{2} + \sum_{l=1}^{u} \sigma_{l}^{2} + \sigma_{e}^{2} + \frac {\pi^{2}}{3}}$  
+
+
+```{r R2GLMM}
+# Extraction of fitted value for the alternative model 
+# fixef() extracts coefficents for fixed effects 
+Fixed <- fixef(m1)[2] * model.matrix(m1)[, 2]
+# Calculation of the variance in fitted values
+VarF <- var(Fixed)
+
+# An alternative way for getting the same result
+#VarF <- var(as.vector(fixef(mF) %*% t(model.matrix(mF))))
+
+# R2GLMM(m) - marginal R2GLMM
+R2GLMMm <- VarF/(VarF + VarCorr(m1)$IDBox[1] + VarCorr(m1)$IDPod[1] + VarCorr(m1)$Plant[1] + VarCorr(m1)$Block[1] + pi^2/3)
+
+# R2GLMM(c) - conditional R2GLMM for full model
+R2GLMMc <- (VarF + VarCorr(m1)$IDPod[1] + VarCorr(m1)$Plant[1] + VarCorr(m1)$Block[1])/(VarF + VarCorr(m1)$IDBox[1] + VarCorr(m1)$IDPod[1] + VarCorr(m1)$Plant[1] + VarCorr(m1)$Block[1] + pi^2/3)
+```
+
+$R^{2}_{GLMM}(m) = `r R2GLMMm`$  
+**-> there is only `r round(R2GLMMm, 3)*100`% of variance that is explained by flowering time**  
+
+$R^{2}_{GLMM}(c) = `r R2GLMMc`$  
+**The whole model explains `r round(R2GLMMc, 3)*100`% of the variance in seed viability.**  
+
+
+#### Residual analysis  
+```{r}
+par(mfrow = c(1,2))
+qqnorm(ranef(m1)$IDBox[,1])
+qqline(ranef(m1)$IDBox[,1])
+hist(ranef(m1)$IDBox[,1], xlim = c(-max(sqrt((ranef(m1)$IDBox[,1])^2)), max(sqrt((ranef(m1)$IDBox[,1])^2))), main = "Residuals distribution", col = "lightgray", las = 1)
+```
+
+### Number of pods per plant  
+Is there a correlation between the number of pods produced by a plant and the viability of the seeds?  
+```{r}
+NbPods <- subset(box, select = c("propViabilityNA", "IDBox", "Plant", "Block", "Plate", "TotalNbPods", "NbSeedminusNA", "IDPod"))
+NbPods <- na.omit(NbPods)
+
+m0 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = NbPods, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+
+m1 <- glmer(propViabilityNA ~ TotalNbPods + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = NbPods, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m1)
+```
+There is no significative effect of the total number of pods per plant on seed viability.  
+
+### Number of seeds per plant  
+```{r}
+boxNumSeed <- subset(box, select = c("propViabilityNA", "IDBox", "Plant", "Block", "Plate", "NumSeedPlant", "NbSeedminusNA", "IDPod"))
+
+m0 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = boxNumSeed, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+
+m1 <- glmer(propViabilityNA ~ NumSeedPlant + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = boxNumSeed, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m1)
+```
+There is no significative effect of the number of seeds per plant on seed viability.  
+
+
+### Number of seeds per pod  
+```{r}
+m0 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+
+m1 <- glmer(propViabilityNA ~ NbSeed + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m1)
+```
+There is a marginally significative effect of the number of seed per pods on seed viability.
+
+```{r}
+kable(summary(m1)$coefficients, digits = 3)
+
+intercept <- 1/(1+exp(-(as.numeric(fixef(m1)[1]))))
+slope_NbSeed <- 1/(1+exp(-(as.numeric(fixef(m1)[1]) + as.numeric(fixef(m1)[2])))) - intercept
+```
+  
+The mean in the proportion of viable seeds per pod is `r intercept`, and the slope of the number of seed per pod is `r slope_NbSeed`. This means that when the number of seeds per pod increases, the viability of those seeds increases too.  
+
+
+
+```{r test_logit, eval = FALSE}
+# Testing Zone effect within Intrapop
+box_intrapop <- subset(box, Plan == "Intrapop", select = c(propViabilityNA, Block, Zone, UniqueGeno, UniqueQuadrat, Plate, IDPod, Plant, IDBox, NbSeedminusNA))
+m0 <- glmer(propViabilityNA ~ Zone + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Plate), data = box_intrapop, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+m1 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Plate), data = box_intrapop, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m1)
+model.sel(m0, m1)
+# There is no Zone effect within the Intrapop dataset
+
+# Aggregated by box
+m0 <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+summary(m0)
+fixef(m0)
+m01 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m01)
+m02 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m02)
+m03 <- glmer(propViabilityNA ~ Block + Plan + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m03)
+m04 <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m04)
+m05 <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m05)
+m06 <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m06)
+m07 <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m07)
+m08 <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m08)
+m09 <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m09)
+AICc(m0, m01, m02, m03, m04, m05, m06, m07, m08, m09)
+model.sel(m0, m01, m02, m03, m04, m05, m06, m07, m08, m09)
+
+
+m1 <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+m11 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m11)
+m12 <- glmer(propViabilityNA ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m12)
+m13 <- glmer(propViabilityNA ~ Block + Plan + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m13)
+m14 <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m14)
+m15 <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m15)
+m16 <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m16)
+m17 <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m17)
+m18 <- glmer(propViabilityNA ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m18)
+AICc(m1, m11, m12, m13, m14, m15, m16, m17, m18)
+model.sel(m1, m11, m12, m13, m14, m15, m16, m17, m18)
+
+# No Block effect
+m2 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+m21 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m21)
+m22 <- glmer(propViabilityNA ~ Plan + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m22)
+m23 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m23)
+m24 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2,m24)
+m25 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m25)
+m26 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m26)
+m27 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m27)
+AICc(m2, m21, m22, m23, m24, m25, m26, m27)
+model.sel(m2, m21, m22, m23, m24, m25, m26, m27)
+
+m3 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+m31 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m31)
+m32 <- glmer(propViabilityNA ~ Plan + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m32)
+m33 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|Plant) + (1|UniqueQuadrat) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m33)
+m34 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|UniqueQuadrat) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m34)
+m35 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m35)
+m36 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m36)
+m37 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m37)
+AICc(m3, m31, m32, m33, m34, m35, m36, m37)
+model.sel(m3, m31, m32, m33, m34, m35, m36, m37)
+# No Quadrat effect
+
+m4 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+m41 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m41)
+m42 <- glmer(propViabilityNA ~ Plan + (1|IDPod) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m42)
+m43 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m43)
+m44 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m44)
+m45 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m45)
+m46 <- glmer(propViabilityNA ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m46)
+AICc(m4, m41, m42, m43, m44, m45, m46)
+model.sel(m4, m41, m42, m43, m44, m45, m46)
+# No Plan effect
+
+m5 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+m51 <- glmer(propViabilityNA ~ (1|IDPod) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5,m51)
+m52 <- glmer(propViabilityNA ~ (1|IDBox) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m52)
+m53 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m53)
+m54 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m54)
+m55 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m55)
+model.sel(m5, m51, m52, m53, m54, m55)
+# No plate effect
+
+m6 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+m61 <- glmer(propViabilityNA ~ (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m6, m61)
+m62 <- glmer(propViabilityNA ~ (1|IDBox) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m6, m62)
+m63 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m6, m63)
+m64 <- glmer(propViabilityNA ~ (1|IDBox) + (1|IDPod) + (1|Plant), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m6, m64)
+model.sel(m6, m61, m62, m63, m64)
+
+summary(m6)
+best <- m6
+```
+
+
+# Dormancy ending analysis  
+Seeds are considered non-dormant if they swelled without needing scarification.  
+
+## Link function choice  
+```{r dormancy_link, eval = FALSE}
+logit <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+
+cauchit <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cauchit'), weights = NbSeedminusNA, na.action = na.omit)
+
+probit <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'probit'), weights = NbSeedminusNA, na.action = na.omit)
+
+cloglog <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'cloglog'), weights = NbSeedminusNA, na.action = na.omit)
+
+model.sel(logit, probit, cauchit, cloglog)
+```
+The logit link function best fits the data.  
+
+```{r Dormancy_logit, eval = FALSE}
+m0 <- glmer(Dormancy ~ Zone + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Zone|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box_intrapop, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+m1 <- glmer(Dormancy ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Zone|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box_intrapop, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m1)
+# No Zone effect within the intrapop dataset
+
+m0 <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+m01 <- glmer(Dormancy ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m01)
+m02 <- glmer(Dormancy ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m02)
+m03 <- glmer(Dormancy ~ Block + Plan + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m03)
+m04 <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m04)
+m05 <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m05)
+m06 <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (0 + Plan|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m06)
+m07 <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m07)
+m08 <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m08)
+m09 <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (0 + Plan|UniqueGeno) + (1|Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m0, m09)
+model.sel(m0, m01, m02, m03, m04, m05, m06, m07, m08, m09)
+# No interactions Plan - Genotype
+
+m1 <- m07
+m11 <- glmer(Dormancy ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m11)
+m12 <- glmer(Dormancy ~ Block + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m12)
+m13 <- glmer(Dormancy ~ Block + Plan + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m13)
+m14 <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m14)
+m15 <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m15)
+m16 <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m16)
+m17 <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m17)
+m18 <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m18)
+m19 <- glmer(Dormancy ~ Block + Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m1, m19)
+model.sel(m1, m11, m12, m13, m14, m15, m16, m17, m18, m19)
+# No Block effect
+
+m2 <- m11
+m21 <- glmer(Dormancy ~ (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m21)
+m22 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m22)
+m23 <- glmer(Dormancy ~ Plan + (1|IDBox) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m23)
+m24 <- glmer(Dormancy ~ Plan + (1|IDBox) + (1|IDPod) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m24)
+m25 <- glmer(Dormancy ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m25)
+m26 <- glmer(Dormancy ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m26)
+m27 <- glmer(Dormancy ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m27)
+m28 <- glmer(Dormancy ~ Plan + (1|IDBox) + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m2, m28)
+model.sel(m2, m21, m22, m23, m24, m25, m26, m27, m28)
+# No Box effect
+
+m3 <- m22
+m31 <- glmer(Dormancy ~ (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m31)
+m32 <- glmer(Dormancy ~ Plan + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m32)
+m33 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m33)
+m34 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m34)
+m35 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m35)
+m36 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m36)
+m37 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|UniqueQuadrat) + (1|UniqueGeno) + (1|Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m3, m37)
+model.sel(m3, m31, m32, m33, m34, m35, m36, m37)
+# No Quadrat effect
+
+m4 <- m34
+m41 <- glmer(Dormancy ~ (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m41)
+m42 <- glmer(Dormancy ~ Plan + (1|Plant) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m42)
+m43 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|UniqueGeno) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m43)
+m44 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|Plate) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m44)
+m45 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m45)
+m46 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m4, m46)
+model.sel(m4, m41, m42, m43, m44, m45, m46)
+# No Plate effect
+
+m5 <- m45
+m51 <- glmer(Dormancy ~ (1|IDPod) + (1|Plant) + (1|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m51)
+m52 <- glmer(Dormancy ~ Plan + (1|Plant) + (1|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m52)
+m53 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|UniqueGeno) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m53)
+m54 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|Block:Plate), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m54)
+m55 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|UniqueGeno), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m5, m55)
+model.sel(m5, m51, m52, m53, m54, m55)
+# No interaction Block:Plate
+
+m6 <- m55
+m61 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m6, m61)
+m62 <- glmer(Dormancy ~ (1|IDPod) + (1|Plant) + (1|UniqueGeno), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m6, m62)
+m63 <- glmer(Dormancy ~ Plan + (1|Plant) + (1|UniqueGeno), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m6, m63)
+m64 <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|UniqueGeno), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m6, m64)
+model.sel(m6, m61, m62, m63, m64)
+
+#mbox <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|IDBox), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+
+summary(m61)
+```
+
+## Results  
+Selected model: **Dormancy ~ Plan + (1|Pod) + (1|Plant)**  
+```{r}
+best <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|IDBox), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+kable(summary(best)$coefficients, digits = 3)
+
+# anti-logit function
+Mean_interpop <- 1/(1+exp(-as.numeric(fixef(best)[1])))
+Mean_intrapop <- 1/(1+exp(-(as.numeric(fixef(best)[1]+as.numeric(fixef(best)[2])))))
+```
+  
+The mean proportion of non-dormant seeds in interpop is `r round(Mean_interpop, 3)`, while it is `r round(Mean_intrapop, 3)` in intrapop.  
+
+Percentage of variance explained:  
+
+|Effect   | Plan      | Pod       | Plant|          
+|:------|------:|------:|------:|  
+|p-value  | 0.002293  | 2.261e-09 | 2.2e-16|           
+|Variance |   | `r VarCorr(best)$IDPod` |`r VarCorr(best)$Plant`|  
+
+### Bootstrap  
+```{r, eval = FALSE}
+best <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|IDBox), data = box, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+
+mySumm <- function(.) {
+  c(beta=fixef(.),sigma=as.data.frame(VarCorr(.))[,4])
+}
+
+dormancy_bootstrap <- bootMer(best, mySumm, nsim = 100)
+save(dormancy_bootstrap, file = "dormancy_bootstrap.RData")
+```
+
+```{r}
+load("viability_bootstrap.RData")
+
+CI_viability <- NULL
+for (i in 1:5){
+  if (i <= 1){
+    CI <- boot.ci(viability_bootstrap, conf = 0.95, type = "norm", index = i)
+    CI_inf <- as.data.frame(CI[4])[1,2]
+    CI_sup <- as.data.frame(CI[4])[1,3]
+    est <- as.numeric(fixef(m)[i])
+    CI_tmp <- c(est, CI_inf, CI_sup)
+    CI_viability <- rbind(CI_viability, CI_tmp)
+  }
+  else {
+    CI <- boot.ci(viability_bootstrap, conf = 0.95, type = "norm", index = i)
+    CI_inf <- as.data.frame(CI[4])[1,2]
+    CI_sup <- as.data.frame(CI[4])[1,3]
+    est <- as.data.frame(VarCorr(m))[(i-1),4]
+    CI_tmp <- c(est, CI_inf, CI_sup)
+    CI_viability <- rbind(CI_viability, CI_tmp)
+  }
+}
+colnames(CI_viability) <- c("Estimate", "CI_inf", "CI_sup")
+
+#kable(cbind(summary(bestlogit)$coefficients[1, 1], CI_viability[1,2:3]), digits = 3)
+kable(cbind(as.data.frame(VarCorr(bestlogit))[,c("grp", "vcov")], CI_viability[2:5, 2:3]))
+```
+
+
+### Residual analysis  
+```{r, fig.width=8, fig.height=6}
+par(mfrow = c(1,2))
+qqnorm(resid(best))
+qqline(resid(best))
+hist(resid(best), xlim = c(-max(sqrt((resid(best))^2)), max(sqrt((resid(best))^2))), main = "Residuals distribution", col = "lightgray", las = 1)
+
+shapiro.test(resid(best))
+```
+
+### BLUP analysis  
+```{r BLUP}
+blup <- ranef(best)
+
+par(mfrow = c(2,2))
+qqnorm(blup$IDPod[,1])
+qqline(blup$IDPod[,1])
+hist(blup$IDPod[,1], xlim = c(-max(sqrt((blup$IDPod[,1])^2)), max(sqrt((blup$IDPod[,1])^2))), main = "Pod", col = "lightgray", las = 1)
+qqnorm(blup$Plant[,1])
+qqline(blup$Plant[,1])
+hist(blup$Plant[,1], xlim = c(-max(sqrt((blup$Plant[,1])^2)), max(sqrt((blup$Plant[,1])^2))), main = "Plant", col = "lightgray", las = 1)
+
+#par(mfrow = c(1,1))
+#dotplot(blup$Plant)
+#dotplot(blup$IDPod)
+```
+
+
+## Covariance analysis  
+### Flowering time  
+```{r}
+boxFlo <- na.omit(box[, c("Dormancy", "Plan", "time_flo", "IDPod", "Plant", "IDBox", "NbSeedminusNA")])
+m <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|IDBox), data = boxFlo, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+m1 <- glmer(Dormancy ~ Plan + time_flo + (1|IDPod) + (1|Plant) + (1|IDBox), data = boxFlo, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m, m1)
+```
+There is no significative effect of the flowering date on the end of dormancy of the seeds.  
+
+### Number of pods per plant  
+```{r}
+boxPods <- na.omit(box[, c("Dormancy", "Plan", "TotalNbPods", "IDPod", "Plant", "IDBox", "NbSeedminusNA")])
+m <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|IDBox), data = boxPods, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+m1 <- glmer(Dormancy ~ Plan + TotalNbPods + (1|IDPod) + (1|Plant) + (1|IDBox), data = boxPods, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m, m1)
+```
+There is no significative effect of the number of pods per plant on the end of dormancy.  
+
+### Number of seeds per plant  
+```{r}
+boxSeed <- na.omit(box[, c("Dormancy", "Plan", "NumSeedPlant", "IDPod", "Plant", "IDBox", "NbSeedminusNA")])
+m <- glmer(Dormancy ~ Plan + (1|IDPod) + (1|Plant) + (1|IDBox), data = boxSeed, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+m1 <- glmer(Dormancy ~ Plan + NumSeedPlant + (1|IDPod) + (1|Plant) + (1|IDBox), data = boxSeed, family = "binomial"(link = 'logit'), weights = NbSeedminusNA, na.action = na.omit)
+anova(m, m1)
+```
+There is no significative effect of the number of seeds per plant on the end of dormancy.  
+
+
+#### R² computation  
+Marginal ($R^{2}_{GLMM}(m)$) and conditional($R^{2}_{GLMM}(c)$) R² are computed using the method from Nakagawa and Schielzeth (2013).  
+
+```{r dorm_R2GLMM}
+# Extraction of fitted value for the alternative model 
+# fixef() extracts coefficents for fixed effects 
+Fixed <- fixef(best)[2] * model.matrix(best)[, 2]
+# Calculation of the variance in fitted values
+VarF <- var(Fixed)
+
+# An alternative way for getting the same result
+#VarF <- var(as.vector(fixef(mF) %*% t(model.matrix(mF))))
+
+# R2GLMM(m) - marginal R2GLMM
+R2GLMMm <- VarF/(VarF + VarCorr(best)$IDPod[1] + VarCorr(best)$Plant[1] + pi^2/3)
+
+# R2GLMM(c) - conditional R2GLMM for full model
+R2GLMMc <- (VarF + VarCorr(best)$IDPod[1] + VarCorr(best)$Plant[1])/(VarF + VarCorr(best)$IDPod[1] + VarCorr(best)$Plant[1] + pi^2/3)
+```
+
+$R^{2}_{GLMM}(m) = `r R2GLMMm`$  
+**-> there is only `r round(R2GLMMm, 3)*100`% of variance that is explained by Plan**  
+
+$R^{2}_{GLMM}(c) = `r R2GLMMc`$  
+**The whole model explains `r round(R2GLMMc, 3)*100`% of the variance in seed dormancy ending.**  
+
+
+```{r, eval = FALSE}
+
+sjp.glmer(m, sort.est = "Plan", y.offset = .4)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
